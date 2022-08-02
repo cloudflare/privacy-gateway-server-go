@@ -15,7 +15,6 @@ import (
 
 type gatewayResource struct {
 	verbose            bool
-	resolver           []resolver
 	keyID              uint8
 	gateway            ohttp.Gateway
 	serverInstanceName string

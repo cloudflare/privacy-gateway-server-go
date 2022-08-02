@@ -28,7 +28,6 @@ const (
 
 	// Environment variables
 	secretSeedEnvironmentVariable  = "SEED_SECRET_KEY"
-	targetNameEnvironmentVariable  = "TARGET_INSTANCE_NAME"
 	certificateEnvironmentVariable = "CERT"
 	keyEnvironmentVariable         = "KEY"
 )
@@ -72,14 +71,6 @@ func main() {
 		rand.Read(seed)
 	}
 
-	var serverName string
-	if serverNameSetting := os.Getenv(targetNameEnvironmentVariable); serverNameSetting != "" {
-		serverName = serverNameSetting
-	} else {
-		serverName = "server_localhost"
-	}
-	log.Printf("Setting Server Name as %v", serverName)
-
 	var certFile string
 	if certFile = os.Getenv(certificateEnvironmentVariable); certFile == "" {
 		certFile = "cert.pem"
@@ -104,10 +95,9 @@ func main() {
 	endpoints["Config"] = configEndpoint
 
 	target := &gatewayResource{
-		verbose:            true,
-		keyID:              keyID,
-		gateway:            gateway,
-		serverInstanceName: serverName,
+		verbose: true,
+		keyID:   keyID,
+		gateway: gateway,
 	}
 
 	server := gatewayServer{
