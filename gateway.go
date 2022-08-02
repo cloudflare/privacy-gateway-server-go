@@ -29,6 +29,8 @@ const (
 
 	// Environment variables
 	secretSeedEnvironmentVariable  = "SEED_SECRET_KEY"
+	customRequestEncodingType      = "CUSTOM_REQUEST_TYPE"
+	customResponseEncodingType     = "CUSTOM_RESPONSE_TYPE"
 	certificateEnvironmentVariable = "CERT"
 	keyEnvironmentVariable         = "KEY"
 )
@@ -90,7 +92,14 @@ func main() {
 		log.Fatalf("Failed to create gateway configuration from seed: %s", err)
 	}
 
-	gateway := ohttp.NewDefaultGateway(config)
+	var gateway ohttp.Gateway
+	requestLabel := os.Getenv(customRequestEncodingType)
+	responseLabel := os.Getenv(customResponseEncodingType)
+	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
+		gateway = ohttp.NewDefaultGateway(config)
+	} else {
+		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
+	}
 
 	endpoints := make(map[string]string)
 	endpoints["Target"] = gatewayEndpoint
