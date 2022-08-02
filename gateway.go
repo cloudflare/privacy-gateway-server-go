@@ -12,6 +12,7 @@ import (
 	"os"
 
 	"github.com/chris-wood/ohttp-go"
+	"github.com/cisco/go-hpke"
 )
 
 const (
@@ -84,10 +85,12 @@ func main() {
 	}
 
 	keyID := uint8(0x00)
-	gateway, err := ohttp.NewGateway(keyID, seed)
+	config, err := ohttp.NewConfigFromSeed(keyID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128, seed)
 	if err != nil {
-		log.Fatalf("Failed to gateway: %s", err)
+		log.Fatalf("Failed to create gateway configuration from seed: %s", err)
 	}
+
+	gateway := ohttp.NewDefaultGateway(config)
 
 	endpoints := make(map[string]string)
 	endpoints["Target"] = gatewayEndpoint
@@ -105,7 +108,7 @@ func main() {
 		target:    target,
 	}
 
-	http.HandleFunc(gatewayEndpoint, server.target.targetQueryHandler)
+	http.HandleFunc(gatewayEndpoint, server.target.gatewayQueryHandler)
 	http.HandleFunc(echoEndpoint, server.target.echoQueryHandler)
 	http.HandleFunc(healthEndpoint, server.healthCheckHandler)
 	http.HandleFunc(configEndpoint, target.configHandler)

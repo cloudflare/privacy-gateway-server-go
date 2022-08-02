@@ -16,6 +16,8 @@ github.com/chris-wood/ohttp-go v0.0.0-20220728214102-e489242d37fc h1:cknz1dMw99O
 github.com/chris-wood/ohttp-go v0.0.0-20220728214102-e489242d37fc/go.mod h1:Z1fw5u1IPfnsMBHQk4AsV0cOXYk/IO5R0W3maMtUgNc=
 github.com/chris-wood/ohttp-go v0.0.0-20220728214441-02b22938ab6c h1:Zgq6Oop9qNAhfYGHPwRq/oYkXOQ5LTGFEa84ng9tKlQ=
 github.com/chris-wood/ohttp-go v0.0.0-20220728214441-02b22938ab6c/go.mod h1:Z1fw5u1IPfnsMBHQk4AsV0cOXYk/IO5R0W3maMtUgNc=
+github.com/chris-wood/ohttp-go v0.0.0-20220802165813-86ddbfbcd3a3 h1:5dh+GBgW10L+14TrWBbAARS2zcpF3imc4JlHp2odpb0=
+github.com/chris-wood/ohttp-go v0.0.0-20220802165813-86ddbfbcd3a3/go.mod h1:Z1fw5u1IPfnsMBHQk4AsV0cOXYk/IO5R0W3maMtUgNc=
 github.com/cisco/go-hpke v0.0.0-20210215210317-01c430f1f302/go.mod h1:RSsoIHRMBe69FbF/fIbmWYa3rrC6vuPyC0MbNUpel3Q=
 github.com/cisco/go-hpke v0.0.0-20210524174249-dd22b38cf960/go.mod h1:RSsoIHRMBe69FbF/fIbmWYa3rrC6vuPyC0MbNUpel3Q=
 github.com/cisco/go-hpke v0.0.0-20220110164554-aec202176774 h1:qh4/iQM+NF66UCzC6vcSs+MGBnQeyrcr6Sbv5ObAOIQ=
