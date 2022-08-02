@@ -134,7 +134,7 @@ func (s *gatewayResource) echoRequestHandler(w http.ResponseWriter, r *http.Requ
 	w.Write(packedResponse)
 }
 
-func (s *gatewayResource) targetQueryHandler(w http.ResponseWriter, r *http.Request) {
+func (s *gatewayResource) gatewayQueryHandler(w http.ResponseWriter, r *http.Request) {
 	if s.verbose {
 		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	}

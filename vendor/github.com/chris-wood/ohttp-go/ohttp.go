@@ -12,10 +12,10 @@ import (
 )
 
 var (
-	labelRequest       = "message/bhttp request"
-	labelResponse      = "message/bhttp response"
-	labelResponseKey   = "key"
-	labelResponseNonce = "nonce"
+	defaultLabelRequest  = "message/bhttp request"
+	defaultLabelResponse = "message/bhttp response"
+	labelResponseKey     = "key"
+	labelResponseNonce   = "nonce"
 )
 
 type ConfigCipherSuite struct {
@@ -268,9 +268,10 @@ func UnmarshalEncapsulatedRequest(enc []byte) (EncapsulatedRequest, error) {
 }
 
 type EncapsulatedRequestContext struct {
-	enc     []byte
-	suite   hpke.CipherSuite
-	context *hpke.SenderContext
+	responseLabel []byte
+	enc           []byte
+	suite         hpke.CipherSuite
+	context       *hpke.SenderContext
 }
 
 type EncapsulatedResponse struct {
@@ -295,8 +296,26 @@ type EncapsulatedResponseContext struct {
 }
 
 type Client struct {
-	config PublicConfig
-	skE    hpke.KEMPrivateKey
+	requestLabel  []byte
+	responseLabel []byte
+	config        PublicConfig
+	skE           hpke.KEMPrivateKey
+}
+
+func NewDefaultClient(config PublicConfig) Client {
+	return Client{
+		requestLabel:  []byte(defaultLabelRequest),
+		responseLabel: []byte(defaultLabelResponse),
+		config:        config,
+	}
+}
+
+func NewCustomClient(config PublicConfig, requestLabel, responseLabel string) Client {
+	return Client{
+		requestLabel:  []byte(requestLabel),
+		responseLabel: []byte(responseLabel),
+		config:        config,
+	}
 }
 
 func (c Client) EncapsulateRequest(request []byte) (EncapsulatedRequest, EncapsulatedRequestContext, error) {
@@ -318,7 +337,7 @@ func (c Client) EncapsulateRequest(request []byte) (EncapsulatedRequest, Encapsu
 	// 	suite.KEM.SetEphemeralKeyPair(c.skE)
 	// }
 
-	info := []byte(labelRequest)
+	info := c.requestLabel
 	info = append(info, 0x00)
 	info = append(info, c.config.ID)
 	buffer := make([]byte, 2)
@@ -344,15 +363,16 @@ func (c Client) EncapsulateRequest(request []byte) (EncapsulatedRequest, Encapsu
 			enc:    enc,
 			ct:     ct,
 		}, EncapsulatedRequestContext{
-			enc:     enc,
-			suite:   suite,
-			context: context,
+			responseLabel: []byte(c.responseLabel),
+			enc:           enc,
+			suite:         suite,
+			context:       context,
 		}, nil
 }
 
 func (c EncapsulatedRequestContext) DecapsulateResponse(response EncapsulatedResponse) ([]byte, error) {
 	// secret = context.Export("message/bhttp response", Nk)
-	secret := c.context.Export([]byte(labelResponse), c.suite.AEAD.KeySize())
+	secret := c.context.Export(c.responseLabel, c.suite.AEAD.KeySize())
 
 	// response_nonce = random(max(Nn, Nk)), taken from the encapsualted response
 	responseNonceLen := max(c.suite.AEAD.KeySize(), c.suite.AEAD.NonceSize())
@@ -384,6 +404,8 @@ func (c EncapsulatedRequestContext) DecapsulateResponse(response EncapsulatedRes
 }
 
 type Gateway struct {
+	requestLabel  []byte
+	responseLabel []byte
 	// map from IDs to private key(s)
 	keyMap map[uint8]PrivateConfig
 }
@@ -395,23 +417,31 @@ func (g Gateway) Config(keyID uint8) (PublicConfig, error) {
 	return PublicConfig{}, fmt.Errorf("Unknown keyID %d", keyID)
 }
 
-func NewGateway(keyID uint8, configSeed []byte) (Gateway, error) {
-	privateConfig, err := NewConfigFromSeed(keyID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128, configSeed)
-	if err != nil {
-		return Gateway{}, err
-	}
-
+func NewDefaultGateway(config PrivateConfig) Gateway {
 	return Gateway{
+		requestLabel:  []byte(defaultLabelRequest),
+		responseLabel: []byte(defaultLabelResponse),
 		keyMap: map[uint8]PrivateConfig{
-			privateConfig.config.ID: privateConfig,
+			config.config.ID: config,
 		},
-	}, nil
+	}
+}
+
+func NewCustomGateway(config PrivateConfig, requestLabel, responseLabel string) Gateway {
+	return Gateway{
+		requestLabel:  []byte(requestLabel),
+		responseLabel: []byte(responseLabel),
+		keyMap: map[uint8]PrivateConfig{
+			config.config.ID: config,
+		},
+	}
 }
 
 type DecapsulateRequestContext struct {
-	enc     []byte
-	suite   hpke.CipherSuite
-	context *hpke.ReceiverContext
+	responseLabel []byte
+	enc           []byte
+	suite         hpke.CipherSuite
+	context       *hpke.ReceiverContext
 }
 
 func (s Gateway) DecapsulateRequest(req EncapsulatedRequest) ([]byte, DecapsulateRequestContext, error) {
@@ -425,7 +455,7 @@ func (s Gateway) DecapsulateRequest(req EncapsulatedRequest) ([]byte, Decapsulat
 		return nil, DecapsulateRequestContext{}, err
 	}
 
-	info := []byte(labelRequest)
+	info := s.requestLabel
 	info = append(info, 0x00)
 	info = append(info, req.keyID)
 	buffer := make([]byte, 2)
@@ -447,9 +477,10 @@ func (s Gateway) DecapsulateRequest(req EncapsulatedRequest) ([]byte, Decapsulat
 	}
 
 	return raw, DecapsulateRequestContext{
-		enc:     req.enc,
-		suite:   suite,
-		context: context,
+		responseLabel: s.responseLabel,
+		enc:           req.enc,
+		suite:         suite,
+		context:       context,
 	}, nil
 }
 
@@ -460,9 +491,9 @@ func max(a, b int) int {
 	return b
 }
 
-func encapsulateResponse(context *hpke.ReceiverContext, response, responseNonce []byte, enc []byte, suite hpke.CipherSuite) (EncapsulatedResponse, error) {
+func encapsulateResponse(context *hpke.ReceiverContext, response, responseNonce []byte, enc []byte, suite hpke.CipherSuite, responseLabel []byte) (EncapsulatedResponse, error) {
 	// secret = context.Export("message/bhttp response", Nk)
-	secret := context.Export([]byte(labelResponse), suite.AEAD.KeySize())
+	secret := context.Export(responseLabel, suite.AEAD.KeySize())
 
 	// salt = concat(enc, response_nonce)
 	salt := append(append(enc, responseNonce...))
@@ -498,9 +529,9 @@ func (c DecapsulateRequestContext) EncapsulateResponse(response []byte) (Encapsu
 		return EncapsulatedResponse{}, err
 	}
 
-	return encapsulateResponse(c.context, response, responseNonce, c.enc, c.suite)
+	return encapsulateResponse(c.context, response, responseNonce, c.enc, c.suite, c.responseLabel)
 }
 
 func (c DecapsulateRequestContext) encapsulateResponseWithResponseNonce(response []byte, responseNonce []byte) (EncapsulatedResponse, error) {
-	return encapsulateResponse(c.context, response, responseNonce, c.enc, c.suite)
+	return encapsulateResponse(c.context, response, responseNonce, c.enc, c.suite, c.responseLabel)
 }

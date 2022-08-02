@@ -5,7 +5,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/rand"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -13,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/chris-wood/ohttp-go"
+	"github.com/cisco/go-hpke"
 )
 
 var (
@@ -20,25 +20,22 @@ var (
 )
 
 func createGateway(t *testing.T) ohttp.Gateway {
-	seed := make([]byte, defaultSeedLength)
-	rand.Read(seed)
-
-	gateway, err := ohttp.NewGateway(FIXED_KEY_ID, seed)
+	config, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
 	if err != nil {
-		t.Fatal("Failed to create a gateway. Exiting now.")
+		t.Fatal("Failed to create a valid config. Exiting now.")
 	}
 
-	return gateway
+	return ohttp.NewDefaultGateway(config)
 }
 
-func createTarget(t *testing.T) gatewayResource {
+func createGatewayServer(t *testing.T) gatewayResource {
 	return gatewayResource{
 		gateway: createGateway(t),
 	}
 }
 
 func TestConfigHandler(t *testing.T) {
-	target := createTarget(t)
+	target := createGatewayServer(t)
 	config, err := target.gateway.Config(FIXED_KEY_ID)
 	if err != nil {
 		t.Fatal(err)
@@ -69,235 +66,140 @@ func TestConfigHandler(t *testing.T) {
 	}
 }
 
-// func TestQueryHandlerInvalidContentType(t *testing.T) {
-// 	target := createTarget(t)
+func TestQueryHandlerInvalidContentType(t *testing.T) {
+	target := createGatewayServer(t)
 
-// 	handler := http.HandlerFunc(target.targetQueryHandler)
+	handler := http.HandlerFunc(target.gatewayQueryHandler)
 
-// 	request, err := http.NewRequest("GET", queryEndpoint, nil)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	request.Header.Add("Content-Type", "application/not-the-droids-youre-looking-for")
+	request, err := http.NewRequest("GET", gatewayEndpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "application/not-the-droids-youre-looking-for")
 
-// 	rr := httptest.NewRecorder()
-// 	handler.ServeHTTP(rr, request)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
 
-// 	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
-// 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
-// 	}
-// }
+	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+	}
+}
 
-// func TestQueryHandlerDoHWithPOST(t *testing.T) {
-// 	target := createTarget(t)
+func TestGatewayHandler(t *testing.T) {
+	target := createGatewayServer(t)
 
-// 	handler := http.HandlerFunc(target.targetQueryHandler)
+	handler := http.HandlerFunc(target.echoQueryHandler)
 
-// 	q := r.queries[0]
-// 	request, err := http.NewRequest(http.MethodPost, queryEndpoint, bytes.NewReader([]byte(q)))
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	request.Header.Add("Content-Type", dnsMessageContentType)
+	config, err := target.gateway.Config(FIXED_KEY_ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := ohttp.NewDefaultClient(config)
 
-// 	rr := httptest.NewRecorder()
-// 	handler.ServeHTTP(rr, request)
+	testMessage := []byte{0xCA, 0xFE}
+	req, _, err := client.EncapsulateRequest(testMessage)
 
-// 	if status := rr.Result().StatusCode; status != http.StatusOK {
-// 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
-// 	}
-// 	if rr.Result().Header.Get("Content-Type") != dnsMessageContentType {
-// 		t.Fatal("Invalid content type response")
-// 	}
+	request, err := http.NewRequest(http.MethodPost, echoEndpoint, bytes.NewReader(req.Marshal()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "message/ohttp-req")
 
-// 	responseBody, err := ioutil.ReadAll(rr.Result().Body)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	if !bytes.Equal(responseBody, r.queryResponseMap[q]) {
-// 		t.Fatal("Incorrect response received")
-// 	}
-// }
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
 
-// func TestQueryHandlerDoHWithGET(t *testing.T) {
-// 	target := createTarget(t)
+	if status := rr.Result().StatusCode; status != http.StatusOK {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+	}
+	if rr.Result().Header.Get("Content-Type") != "message/ohttp-res" {
+		t.Fatal("Invalid content type response")
+	}
+}
 
-// 	handler := http.HandlerFunc(target.targetQueryHandler)
+func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
+	target := createGatewayServer(t)
 
-// 	q := r.queries[0]
-// 	encodedQuery := base64.RawURLEncoding.EncodeToString([]byte(q))
+	handler := http.HandlerFunc(target.echoQueryHandler)
 
-// 	request, err := http.NewRequest(http.MethodGet, queryEndpoint+"?dns="+encodedQuery, nil)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	request.Header.Add("Content-Type", dnsMessageContentType)
+	config, err := target.gateway.Config(FIXED_KEY_ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := ohttp.NewDefaultClient(config)
 
-// 	rr := httptest.NewRecorder()
-// 	handler.ServeHTTP(rr, request)
+	testMessage := []byte{0xCA, 0xFE}
+	req, _, err := client.EncapsulateRequest(testMessage)
 
-// 	if status := rr.Result().StatusCode; status != http.StatusOK {
-// 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
-// 	}
-// 	if rr.Result().Header.Get("Content-Type") != dnsMessageContentType {
-// 		t.Fatal("Invalid content type response")
-// 	}
+	request, err := http.NewRequest(http.MethodGet, echoEndpoint, bytes.NewReader(req.Marshal()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "message/ohttp-req")
 
-// 	responseBody, err := ioutil.ReadAll(rr.Result().Body)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	if !bytes.Equal(responseBody, r.queryResponseMap[q]) {
-// 		t.Fatal("Incorrect response received")
-// 	}
-// }
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
 
-// func TestQueryHandlerDoHWithInvalidMethod(t *testing.T) {
-// 	target := createTarget(t)
+	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+	}
+}
 
-// 	handler := http.HandlerFunc(target.targetQueryHandler)
+func TestGatewayHandlerWithInvalidKey(t *testing.T) {
+	target := createGatewayServer(t)
 
-// 	q := r.queries[0]
-// 	encodedQuery := base64.RawURLEncoding.EncodeToString([]byte(q))
-// 	request, err := http.NewRequest(http.MethodPut, queryEndpoint+"?dns="+encodedQuery, nil)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	request.Header.Add("Content-Type", dnsMessageContentType)
+	handler := http.HandlerFunc(target.echoQueryHandler)
 
-// 	rr := httptest.NewRecorder()
-// 	handler.ServeHTTP(rr, request)
+	// Generate a new config that's different from the target's
+	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+	if err != nil {
+		t.Fatal("Failed to create a valid config. Exiting now.")
+	}
+	client := ohttp.NewDefaultClient(privateConfig.Config())
 
-// 	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
-// 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
-// 	}
-// }
+	testMessage := []byte{0xCA, 0xFE}
+	req, _, err := client.EncapsulateRequest(testMessage)
 
-// func TestQueryHandlerODoHWithInvalidMethod(t *testing.T) {
-// 	target := createTarget(t)
+	request, err := http.NewRequest(http.MethodPost, echoEndpoint, bytes.NewReader(req.Marshal()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "message/ohttp-req")
 
-// 	handler := http.HandlerFunc(target.targetQueryHandler)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
 
-// 	q := r.queries[0]
-// 	obliviousQuery := odoh.CreateObliviousDNSQuery([]byte(q), 0)
-// 	encryptedQuery, _, err := target.odohKeyPair.Config.Contents.EncryptQuery(obliviousQuery)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
+	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+	}
+}
 
-// 	request, err := http.NewRequest(http.MethodGet, queryEndpoint, bytes.NewReader(encryptedQuery.Marshal()))
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	request.Header.Add("Content-Type", odohMessageContentType)
+func TestGatewayHandlerWithCorruptContent(t *testing.T) {
+	target := createGatewayServer(t)
 
-// 	rr := httptest.NewRecorder()
-// 	handler.ServeHTTP(rr, request)
+	handler := http.HandlerFunc(target.echoQueryHandler)
 
-// 	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
-// 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
-// 	}
-// }
+	// Generate a new config that's different from the target's
+	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+	if err != nil {
+		t.Fatal("Failed to create a valid config. Exiting now.")
+	}
+	client := ohttp.NewDefaultClient(privateConfig.Config())
 
-// func TestQueryHandlerODoH(t *testing.T) {
-// 	target := createTarget(t)
+	testMessage := []byte{0xCA, 0xFE}
+	req, _, err := client.EncapsulateRequest(testMessage)
+	reqEnc := req.Marshal()
+	reqEnc[len(reqEnc)-1] ^= 0xFF
 
-// 	handler := http.HandlerFunc(target.targetQueryHandler)
+	request, err := http.NewRequest(http.MethodPost, echoEndpoint, bytes.NewReader(reqEnc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "message/ohttp-req")
 
-// 	q := r.queries[0]
-// 	obliviousQuery := odoh.CreateObliviousDNSQuery([]byte(q), 0)
-// 	encryptedQuery, context, err := target.odohKeyPair.Config.Contents.EncryptQuery(obliviousQuery)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
 
-// 	request, err := http.NewRequest(http.MethodPost, queryEndpoint, bytes.NewReader(encryptedQuery.Marshal()))
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	request.Header.Add("Content-Type", odohMessageContentType)
-
-// 	rr := httptest.NewRecorder()
-// 	handler.ServeHTTP(rr, request)
-
-// 	if status := rr.Result().StatusCode; status != http.StatusOK {
-// 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
-// 	}
-// 	if rr.Result().Header.Get("Content-Type") != odohMessageContentType {
-// 		t.Fatal("Invalid content type response")
-// 	}
-
-// 	responseBody, err := ioutil.ReadAll(rr.Result().Body)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-
-// 	odohQueryResponse, err := odoh.UnmarshalDNSMessage(responseBody)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-
-// 	response, err := context.OpenAnswer(odohQueryResponse)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-
-// 	if !bytes.Equal(response, r.queryResponseMap[q]) {
-// 		t.Fatal(fmt.Errorf("Incorrect response received. Got %v, expected %v", response, r.queryResponseMap[q]))
-// 	}
-// }
-
-// func TestQueryHandlerODoHWithInvalidKey(t *testing.T) {
-// 	target := createTarget(t)
-
-// 	handler := http.HandlerFunc(target.targetQueryHandler)
-
-// 	differentKeyPair := createKeyPair(t)
-// 	q := r.queries[0]
-// 	obliviousQuery := odoh.CreateObliviousDNSQuery([]byte(q), 0)
-// 	encryptedQuery, _, err := differentKeyPair.Config.Contents.EncryptQuery(obliviousQuery)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-
-// 	request, err := http.NewRequest(http.MethodPost, queryEndpoint, bytes.NewReader(encryptedQuery.Marshal()))
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	request.Header.Add("Content-Type", odohMessageContentType)
-
-// 	rr := httptest.NewRecorder()
-// 	handler.ServeHTTP(rr, request)
-
-// 	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
-// 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
-// 	}
-// }
-
-// func TestQueryHandlerODoHWithCorruptCiphertext(t *testing.T) {
-// 	target := createTarget(t)
-
-// 	handler := http.HandlerFunc(target.targetQueryHandler)
-
-// 	q := r.queries[0]
-// 	obliviousQuery := odoh.CreateObliviousDNSQuery([]byte(q), 0)
-// 	encryptedQuery, _, err := target.odohKeyPair.Config.Contents.EncryptQuery(obliviousQuery)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	queryBytes := encryptedQuery.Marshal()
-// 	queryBytes[len(queryBytes)-1] ^= 0xFF
-
-// 	request, err := http.NewRequest(http.MethodPost, queryEndpoint, bytes.NewReader(queryBytes))
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	request.Header.Add("Content-Type", odohMessageContentType)
-
-// 	rr := httptest.NewRecorder()
-// 	handler.ServeHTTP(rr, request)
-
-// 	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
-// 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
-// 	}
-// }
+	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+	}
+}
