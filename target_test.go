@@ -28,9 +28,16 @@ func createGateway(t *testing.T) ohttp.Gateway {
 	return ohttp.NewDefaultGateway(config)
 }
 
+func testEchoHandler(request []byte) ([]byte, error) {
+	return request, nil
+}
+
 func createGatewayServer(t *testing.T) gatewayResource {
+	handlers := make(map[string]ContentHandler)
+	handlers[echoEndpoint] = testEchoHandler
 	return gatewayResource{
-		gateway: createGateway(t),
+		gateway:  createGateway(t),
+		handlers: handlers,
 	}
 }
 
@@ -69,7 +76,7 @@ func TestConfigHandler(t *testing.T) {
 func TestQueryHandlerInvalidContentType(t *testing.T) {
 	target := createGatewayServer(t)
 
-	handler := http.HandlerFunc(target.gatewayQueryHandler)
+	handler := http.HandlerFunc(target.gatewayHandler)
 
 	request, err := http.NewRequest("GET", gatewayEndpoint, nil)
 	if err != nil {
@@ -88,7 +95,7 @@ func TestQueryHandlerInvalidContentType(t *testing.T) {
 func TestGatewayHandler(t *testing.T) {
 	target := createGatewayServer(t)
 
-	handler := http.HandlerFunc(target.echoQueryHandler)
+	handler := http.HandlerFunc(target.gatewayHandler)
 
 	config, err := target.gateway.Config(FIXED_KEY_ID)
 	if err != nil {
@@ -119,7 +126,7 @@ func TestGatewayHandler(t *testing.T) {
 func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
 	target := createGatewayServer(t)
 
-	handler := http.HandlerFunc(target.echoQueryHandler)
+	handler := http.HandlerFunc(target.gatewayHandler)
 
 	config, err := target.gateway.Config(FIXED_KEY_ID)
 	if err != nil {
@@ -147,7 +154,7 @@ func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
 func TestGatewayHandlerWithInvalidKey(t *testing.T) {
 	target := createGatewayServer(t)
 
-	handler := http.HandlerFunc(target.echoQueryHandler)
+	handler := http.HandlerFunc(target.gatewayHandler)
 
 	// Generate a new config that's different from the target's
 	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
@@ -176,7 +183,7 @@ func TestGatewayHandlerWithInvalidKey(t *testing.T) {
 func TestGatewayHandlerWithCorruptContent(t *testing.T) {
 	target := createGatewayServer(t)
 
-	handler := http.HandlerFunc(target.echoQueryHandler)
+	handler := http.HandlerFunc(target.gatewayHandler)
 
 	// Generate a new config that's different from the target's
 	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)

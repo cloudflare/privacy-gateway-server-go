@@ -21,11 +21,12 @@ const (
 	defaultSeedLength = 32
 
 	// HTTP constants. Fill in your proxy and target here.
-	defaultPort     = "8080"
-	gatewayEndpoint = "/gateway"
-	echoEndpoint    = "/gateway-echo"
-	healthEndpoint  = "/health"
-	configEndpoint  = "/ohttp-configs"
+	defaultPort           = "8080"
+	gatewayEndpoint       = "/gateway"
+	echoEndpoint          = "/gateway-echo"
+	customGatewayEndpoint = "/gateway-custom"
+	healthEndpoint        = "/health"
+	configEndpoint        = "/ohttp-configs"
 
 	// Environment variables
 	secretSeedEnvironmentVariable  = "SEED_SECRET_KEY"
@@ -53,6 +54,30 @@ func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 func (s gatewayServer) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	fmt.Fprint(w, "ok")
+}
+
+func echoHandler(request []byte) ([]byte, error) {
+	return request, nil
+}
+
+func bhttpHandler(binaryRequest []byte) ([]byte, error) {
+	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+
+	binaryResponse := ohttp.CreateBinaryResponse(response)
+	return binaryResponse.Marshal()
+}
+
+func customHandler(request []byte) ([]byte, error) {
+	return nil, fmt.Errorf("Not implemented")
 }
 
 func main() {
@@ -106,10 +131,15 @@ func main() {
 	endpoints["Health"] = healthEndpoint
 	endpoints["Config"] = configEndpoint
 
+	handlers := make(map[string]ContentHandler)
+	handlers[echoEndpoint] = echoHandler
+	handlers[gatewayEndpoint] = bhttpHandler
+	handlers[customGatewayEndpoint] = customHandler
 	target := &gatewayResource{
-		verbose: true,
-		keyID:   keyID,
-		gateway: gateway,
+		verbose:  true,
+		keyID:    keyID,
+		gateway:  gateway,
+		handlers: handlers,
 	}
 
 	server := gatewayServer{
@@ -117,8 +147,8 @@ func main() {
 		target:    target,
 	}
 
-	http.HandleFunc(gatewayEndpoint, server.target.gatewayQueryHandler)
-	http.HandleFunc(echoEndpoint, server.target.echoQueryHandler)
+	http.HandleFunc(gatewayEndpoint, server.target.gatewayHandler)
+	http.HandleFunc(echoEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(healthEndpoint, server.healthCheckHandler)
 	http.HandleFunc(configEndpoint, target.configHandler)
 	http.HandleFunc("/", server.indexHandler)
