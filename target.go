@@ -8,16 +8,17 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"net/http/httputil"
 
 	"github.com/chris-wood/ohttp-go"
 )
 
+type ContentHandler func(request []byte) ([]byte, error)
+
 type gatewayResource struct {
-	verbose            bool
-	keyID              uint8
-	gateway            ohttp.Gateway
-	serverInstanceName string
+	verbose  bool
+	keyID    uint8
+	gateway  ohttp.Gateway
+	handlers map[string]ContentHandler
 }
 
 const (
@@ -39,7 +40,17 @@ func (s *gatewayResource) parseEncapsulatedRequestFromContent(r *http.Request) (
 	return ohttp.UnmarshalEncapsulatedRequest(encryptedMessageBytes)
 }
 
-func (s *gatewayResource) gatewayRequestHandler(w http.ResponseWriter, r *http.Request) {
+func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request) {
+	if s.verbose {
+		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
+	}
+
+	if r.Header.Get("Content-Type") != ohttpRequestContentType {
+		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
 	encapsulatedRequest, err := s.parseEncapsulatedRequestFromContent(r)
 	if err != nil {
 		log.Println("parseEncapsulatedRequestFromContent failed:", err)
@@ -54,40 +65,23 @@ func (s *gatewayResource) gatewayRequestHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
-	if err != nil {
-		log.Println("UnmarshalBinaryRequest failed:", err)
+	var handler ContentHandler
+	var ok bool
+	if handler, ok = s.handlers[r.URL.Path]; !ok {
+		log.Printf("Unknown handler for %s", r.URL.Path)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
-	if s.verbose {
-		encRequest, err := httputil.DumpRequest(request, true)
-		if err != nil {
-			log.Println("DumpRequest failed:", err)
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-			return
-		}
-		log.Println("Decoded request:", string(encRequest))
-	}
-
-	client := &http.Client{}
-	response, err := client.Do(request)
+	// Dispatch to the content handler bound to the URL path
+	binaryResponse, err := handler(binaryRequest)
 	if err != nil {
-		log.Println("Target fetch failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadGateway), http.StatusBadGateway) // XXX(caw): pick a better name for this
+		log.Println("Content handler failed:", err)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
-	binaryResponse := ohttp.CreateBinaryResponse(response)
-	encodedResponse, err := binaryResponse.Marshal()
-	if err != nil {
-		log.Println("Binary response encoding failed:", err)
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-
-	encapsulatedResponse, err := context.EncapsulateResponse(encodedResponse)
+	encapsulatedResponse, err := context.EncapsulateResponse(binaryResponse)
 	if err != nil {
 		log.Println("EncapsulateResponse failed:", err)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
@@ -101,63 +95,6 @@ func (s *gatewayResource) gatewayRequestHandler(w http.ResponseWriter, r *http.R
 
 	w.Header().Set("Content-Type", ohttpResponseContentType)
 	w.Write(packedResponse)
-}
-
-func (s *gatewayResource) echoRequestHandler(w http.ResponseWriter, r *http.Request) {
-	encapsulatedRequest, err := s.parseEncapsulatedRequestFromContent(r)
-	if err != nil {
-		log.Println("parseEncapsulatedRequestFromContent failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-
-	binaryRequest, context, err := s.gateway.DecapsulateRequest(encapsulatedRequest)
-	if err != nil {
-		log.Println("DecapsulateRequest failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-
-	encapsulatedResponse, err := context.EncapsulateResponse(binaryRequest)
-	if err != nil {
-		log.Println("EncapsulateResponse failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-	packedResponse := encapsulatedResponse.Marshal()
-
-	if s.verbose {
-		log.Printf("Target response: %x", packedResponse)
-	}
-
-	w.Header().Set("Content-Type", ohttpResponseContentType)
-	w.Write(packedResponse)
-}
-
-func (s *gatewayResource) gatewayQueryHandler(w http.ResponseWriter, r *http.Request) {
-	if s.verbose {
-		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
-	}
-
-	if r.Header.Get("Content-Type") == ohttpRequestContentType {
-		s.gatewayRequestHandler(w, r)
-	} else {
-		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-	}
-}
-
-func (s *gatewayResource) echoQueryHandler(w http.ResponseWriter, r *http.Request) {
-	if s.verbose {
-		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
-	}
-
-	if r.Header.Get("Content-Type") == ohttpRequestContentType {
-		s.echoRequestHandler(w, r)
-	} else {
-		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-	}
 }
 
 func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) {
