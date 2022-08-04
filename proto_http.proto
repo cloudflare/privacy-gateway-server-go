@@ -13,6 +13,9 @@ message Request {
         PUT = 3;
         DELETE = 4;
         PATCH = 5;
+        OPTIONS = 6;
+        TRACE = 7;
+        // Note: CONNECT is not supported
     }
     enum Scheme {
         HTTP = 0;

@@ -12,12 +12,14 @@ import (
 )
 
 var requestMethodMap = map[Request_Method]string{
-	Request_GET:    "GET",
-	Request_HEAD:   "HEAD",
-	Request_DELETE: "DELETE",
-	Request_POST:   "POST",
-	Request_PUT:    "PUT",
-	Request_PATCH:  "PATCH",
+	Request_GET:     "GET",
+	Request_HEAD:    "HEAD",
+	Request_DELETE:  "DELETE",
+	Request_POST:    "POST",
+	Request_PUT:     "PUT",
+	Request_PATCH:   "PATCH",
+	Request_OPTIONS: "OPTIONS",
+	Request_TRACE:   "TRACE",
 }
 
 var requestSchemeMap = map[Request_Scheme]string{
