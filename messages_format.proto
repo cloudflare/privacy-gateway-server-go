@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+message RequestMsg {
+// control data
+  string method = 1;
+  string scheme = 2;
+  string authority = 3;
+  string path = 4;
+// 
+  string[] header_fields = 5;
+  byte[] body = 6;
+}
+
+
+message ResponseMsg {
+ // control data
+  int32 statusCode = 1;
+// todo: what about frames?
+  string[] header_fields = 2;
+  byte[] body = 3;
+}
