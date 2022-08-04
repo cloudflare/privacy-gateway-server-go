@@ -13,6 +13,7 @@ import (
 
 	"github.com/chris-wood/ohttp-go"
 	"github.com/cisco/go-hpke"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -22,7 +23,8 @@ const (
 
 	// HTTP constants. Fill in your proxy and target here.
 	defaultPort           = "8080"
-	gatewayEndpoint       = "/gateway"
+	bhttpEndpoint         = "/gateway"
+	protobufEndpoint      = "/gateway-protobuf"
 	echoEndpoint          = "/gateway-echo"
 	customGatewayEndpoint = "/gateway-custom"
 	healthEndpoint        = "/health"
@@ -37,8 +39,10 @@ const (
 )
 
 type gatewayServer struct {
-	endpoints map[string]string
-	target    *gatewayResource
+	requestLabel  string
+	responseLabel string
+	endpoints     map[string]string
+	target        *gatewayResource
 }
 
 func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +50,8 @@ func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "OHTTP Gateway\n")
 	fmt.Fprint(w, "----------------\n")
 	fmt.Fprintf(w, "Config endpoint: https://%s%s\n", r.Host, s.endpoints["Config"])
+	fmt.Fprintf(w, "   Request content type:  %s\n", s.requestLabel)
+	fmt.Fprintf(w, "   Response content type: %s\n", s.responseLabel)
 	fmt.Fprintf(w, "Target endpoint: https://%s%s\n", r.Host, s.endpoints["Target"])
 	fmt.Fprintf(w, "Echo endpoint: https://%s%s\n", r.Host, s.endpoints["Echo"])
 	fmt.Fprint(w, "----------------\n")
@@ -74,6 +80,31 @@ func bhttpHandler(binaryRequest []byte) ([]byte, error) {
 
 	binaryResponse := ohttp.CreateBinaryResponse(response)
 	return binaryResponse.Marshal()
+}
+
+func protobufHandler(binaryRequest []byte) ([]byte, error) {
+	request := &Request{}
+	if err := proto.Unmarshal(binaryRequest, request); err != nil {
+		return nil, err
+	}
+
+	targetRequest, err := protoHTTPToRequest(request)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{}
+	targetResponse, err := client.Do(targetRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := responseToProtoHTTP(targetResponse)
+	if err != nil {
+		return nil, err
+	}
+
+	return proto.Marshal(response)
 }
 
 func customHandler(request []byte) ([]byte, error) {
@@ -118,23 +149,30 @@ func main() {
 	}
 
 	var gateway ohttp.Gateway
+	var targetEndpoint string
+	var targetHandler ContentHandler
 	requestLabel := os.Getenv(customRequestEncodingType)
 	responseLabel := os.Getenv(customResponseEncodingType)
 	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
 		gateway = ohttp.NewDefaultGateway(config)
+		requestLabel = "message/bhttp request"
+		responseLabel = "message/bhttp response"
+		targetEndpoint = bhttpEndpoint
+		targetHandler = bhttpHandler
+	} else if requestLabel == "message/protohttp request" && responseLabel == "message/protohttp response" {
+		// } else if requestLabel == "message/bhttp request" && responseLabel == "message/bhttp response" {
+		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
+		targetEndpoint = protobufEndpoint
+		targetHandler = protobufHandler
 	} else {
 		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
+		targetEndpoint = customGatewayEndpoint
+		targetHandler = customHandler
 	}
 
-	endpoints := make(map[string]string)
-	endpoints["Target"] = gatewayEndpoint
-	endpoints["Health"] = healthEndpoint
-	endpoints["Config"] = configEndpoint
-
 	handlers := make(map[string]ContentHandler)
-	handlers[echoEndpoint] = echoHandler
-	handlers[gatewayEndpoint] = bhttpHandler
-	handlers[customGatewayEndpoint] = customHandler
+	handlers[targetEndpoint] = targetHandler // Content-specific handler
+	handlers[echoEndpoint] = echoHandler     // Content-agnostic handler
 	target := &gatewayResource{
 		verbose:  true,
 		keyID:    keyID,
@@ -142,12 +180,19 @@ func main() {
 		handlers: handlers,
 	}
 
+	endpoints := make(map[string]string)
+	endpoints["Target"] = targetEndpoint
+	endpoints["Health"] = healthEndpoint
+	endpoints["Config"] = configEndpoint
+
 	server := gatewayServer{
-		endpoints: endpoints,
-		target:    target,
+		requestLabel:  requestLabel,
+		responseLabel: responseLabel,
+		endpoints:     endpoints,
+		target:        target,
 	}
 
-	http.HandleFunc(gatewayEndpoint, server.target.gatewayHandler)
+	http.HandleFunc(targetEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(echoEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(healthEndpoint, server.healthCheckHandler)
 	http.HandleFunc(configEndpoint, target.configHandler)

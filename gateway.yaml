@@ -1,7 +1,6 @@
 # [START runtime]
 service: default
-runtime: go114
+runtime: go116
 env_variables:
   SEED_SECRET_KEY: "99fe7e7aa97178f40c8cc145d38b3d25"
-  TARGET_INSTANCE_NAME: "server_target_gcp"
 # [END runtime]
