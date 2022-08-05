@@ -1,0 +1,8 @@
+# [START runtime]
+service: default
+runtime: go116
+env_variables:
+  SEED_SECRET_KEY: "01fe7e7aa97178f40c8cc145d38b3d25"
+  CUSTOM_REQUEST_TYPE: "message/protohttp request"
+  CUSTOM_RESPONSE_TYPE: "message/protohttp response"
+# [END runtime]

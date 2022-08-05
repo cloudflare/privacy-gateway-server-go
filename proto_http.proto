@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+option go_package = ".;main";
+
+// A simplified Known Length Request, inspired by Binary HTTP:
+//   https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-binary-message#section-3.1
+message Request {
+    // Control data
+    enum Method {
+        GET = 0;
+        HEAD = 1;
+        POST = 2;
+        PUT = 3;
+        DELETE = 4;
+        PATCH = 5;
+        OPTIONS = 6;
+        TRACE = 7;
+        // Note: CONNECT is not supported
+    }
+    enum Scheme {
+        HTTP = 0;
+        HTTPS = 1;
+    }
+    Method method = 1;
+    Scheme scheme = 2;
+    string authority = 3;
+    string path = 4;
+    // Header fields
+    map<string, string> headers = 5;
+    // Content
+    bytes body = 6;
+    // Padding
+    bytes padding = 7;
+}
+
+// A simplified Known Length Response, inspired by Binary HTTP:
+//   https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-binary-message#section-3.1
+message Response {
+    // Control data
+    int32 statusCode = 1;
+    // Header fields
+    map<string, string> headers = 2;
+    // Content
+    bytes body = 3;
+    // Padding
+    bytes padding = 4;
+}
