@@ -78,7 +78,7 @@ func TestQueryHandlerInvalidContentType(t *testing.T) {
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
-	request, err := http.NewRequest("GET", bhttpEndpoint, nil)
+	request, err := http.NewRequest("GET", gatewayEndpoint, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
