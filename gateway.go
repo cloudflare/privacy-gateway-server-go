@@ -22,13 +22,11 @@ const (
 	defaultSeedLength = 32
 
 	// HTTP constants. Fill in your proxy and target here.
-	defaultPort           = "8080"
-	bhttpEndpoint         = "/gateway"
-	protobufEndpoint      = "/gateway-protobuf"
-	echoEndpoint          = "/gateway-echo"
-	customGatewayEndpoint = "/gateway-custom"
-	healthEndpoint        = "/health"
-	configEndpoint        = "/ohttp-configs"
+	defaultPort     = "8080"
+	gatewayEndpoint = "/gateway"
+	echoEndpoint    = "/gateway-echo"
+	healthEndpoint  = "/health"
+	configEndpoint  = "/ohttp-configs"
 
 	// Environment variables
 	secretSeedEnvironmentVariable  = "SEED_SECRET_KEY"
@@ -50,9 +48,9 @@ func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "OHTTP Gateway\n")
 	fmt.Fprint(w, "----------------\n")
 	fmt.Fprintf(w, "Config endpoint: https://%s%s\n", r.Host, s.endpoints["Config"])
+	fmt.Fprintf(w, "Target endpoint: https://%s%s\n", r.Host, s.endpoints["Target"])
 	fmt.Fprintf(w, "   Request content type:  %s\n", s.requestLabel)
 	fmt.Fprintf(w, "   Response content type: %s\n", s.responseLabel)
-	fmt.Fprintf(w, "Target endpoint: https://%s%s\n", r.Host, s.endpoints["Target"])
 	fmt.Fprintf(w, "Echo endpoint: https://%s%s\n", r.Host, s.endpoints["Echo"])
 	fmt.Fprint(w, "----------------\n")
 }
@@ -149,7 +147,6 @@ func main() {
 	}
 
 	var gateway ohttp.Gateway
-	var targetEndpoint string
 	var targetHandler ContentHandler
 	requestLabel := os.Getenv(customRequestEncodingType)
 	responseLabel := os.Getenv(customResponseEncodingType)
@@ -157,22 +154,18 @@ func main() {
 		gateway = ohttp.NewDefaultGateway(config)
 		requestLabel = "message/bhttp request"
 		responseLabel = "message/bhttp response"
-		targetEndpoint = bhttpEndpoint
 		targetHandler = bhttpHandler
 	} else if requestLabel == "message/protohttp request" && responseLabel == "message/protohttp response" {
-		// } else if requestLabel == "message/bhttp request" && responseLabel == "message/bhttp response" {
 		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
-		targetEndpoint = protobufEndpoint
 		targetHandler = protobufHandler
 	} else {
 		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
-		targetEndpoint = customGatewayEndpoint
 		targetHandler = customHandler
 	}
 
 	handlers := make(map[string]ContentHandler)
-	handlers[targetEndpoint] = targetHandler // Content-specific handler
-	handlers[echoEndpoint] = echoHandler     // Content-agnostic handler
+	handlers[gatewayEndpoint] = targetHandler // Content-specific handler
+	handlers[echoEndpoint] = echoHandler      // Content-agnostic handler
 	target := &gatewayResource{
 		verbose:  true,
 		keyID:    keyID,
@@ -181,7 +174,7 @@ func main() {
 	}
 
 	endpoints := make(map[string]string)
-	endpoints["Target"] = targetEndpoint
+	endpoints["Target"] = gatewayEndpoint
 	endpoints["Health"] = healthEndpoint
 	endpoints["Config"] = configEndpoint
 
@@ -192,7 +185,7 @@ func main() {
 		target:        target,
 	}
 
-	http.HandleFunc(targetEndpoint, server.target.gatewayHandler)
+	http.HandleFunc(gatewayEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(echoEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(healthEndpoint, server.healthCheckHandler)
 	http.HandleFunc(configEndpoint, target.configHandler)
