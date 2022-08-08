@@ -16,7 +16,9 @@ import (
 )
 
 var (
-	FIXED_KEY_ID = uint8(0x00)
+	FIXED_KEY_ID     = uint8(0x00)
+	FORBIDDEN_TARGET = "forbidden.example"
+	ALLOWED_TARGET   = "allowed.example"
 )
 
 func createGateway(t *testing.T) ohttp.Gateway {
@@ -28,21 +30,55 @@ func createGateway(t *testing.T) ohttp.Gateway {
 	return ohttp.NewDefaultGateway(config)
 }
 
-func testEchoHandler(request []byte) ([]byte, error) {
+func testEchoHandler(request []byte, filter TargetFilter) ([]byte, error) {
 	return request, nil
 }
 
-func createGatewayServer(t *testing.T) gatewayResource {
+func testForbiddenEchoHandler(request []byte, filter TargetFilter) ([]byte, error) {
+	return nil, TargetForbiddenError
+}
+
+func testBhttpHandler(binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	if !filter(request.Host) {
+		return nil, TargetForbiddenError
+	}
+
+	return binaryRequest, nil
+}
+
+func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 	handlers := make(map[string]ContentHandler)
 	handlers[echoEndpoint] = testEchoHandler
+	handlers[gatewayEndpoint] = testForbiddenEchoHandler
 	return gatewayResource{
 		gateway:  createGateway(t),
 		handlers: handlers,
+		allowedOrigins: map[string]bool{
+			ALLOWED_TARGET: true,
+		},
+	}
+}
+
+func createMockBhttpGatewayServer(t *testing.T) gatewayResource {
+	handlers := make(map[string]ContentHandler)
+	handlers[echoEndpoint] = testEchoHandler
+	handlers[gatewayEndpoint] = testBhttpHandler
+	return gatewayResource{
+		gateway:  createGateway(t),
+		handlers: handlers,
+		allowedOrigins: map[string]bool{
+			ALLOWED_TARGET: true,
+		},
 	}
 }
 
 func TestConfigHandler(t *testing.T) {
-	target := createGatewayServer(t)
+	target := createMockEchoGatewayServer(t)
 	config, err := target.gateway.Config(FIXED_KEY_ID)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +110,7 @@ func TestConfigHandler(t *testing.T) {
 }
 
 func TestQueryHandlerInvalidContentType(t *testing.T) {
-	target := createGatewayServer(t)
+	target := createMockEchoGatewayServer(t)
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
@@ -93,7 +129,7 @@ func TestQueryHandlerInvalidContentType(t *testing.T) {
 }
 
 func TestGatewayHandler(t *testing.T) {
-	target := createGatewayServer(t)
+	target := createMockEchoGatewayServer(t)
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
@@ -124,7 +160,7 @@ func TestGatewayHandler(t *testing.T) {
 }
 
 func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
-	target := createGatewayServer(t)
+	target := createMockEchoGatewayServer(t)
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
@@ -152,7 +188,7 @@ func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
 }
 
 func TestGatewayHandlerWithInvalidKey(t *testing.T) {
-	target := createGatewayServer(t)
+	target := createMockEchoGatewayServer(t)
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
@@ -181,17 +217,17 @@ func TestGatewayHandlerWithInvalidKey(t *testing.T) {
 }
 
 func TestGatewayHandlerWithCorruptContent(t *testing.T) {
-	target := createGatewayServer(t)
+	target := createMockEchoGatewayServer(t)
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
-	// Generate a new config that's different from the target's
-	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+	config, err := target.gateway.Config(FIXED_KEY_ID)
 	if err != nil {
-		t.Fatal("Failed to create a valid config. Exiting now.")
+		t.Fatal(err)
 	}
-	client := ohttp.NewDefaultClient(privateConfig.Config())
+	client := ohttp.NewDefaultClient(config)
 
+	// Corrupt the message
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
 	reqEnc := req.Marshal()
@@ -208,5 +244,110 @@ func TestGatewayHandlerWithCorruptContent(t *testing.T) {
 
 	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+	}
+}
+
+func TestGatewayHandlerWithForbiddenTarget(t *testing.T) {
+	target := createMockEchoGatewayServer(t)
+
+	handler := http.HandlerFunc(target.gatewayHandler)
+
+	config, err := target.gateway.Config(FIXED_KEY_ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := ohttp.NewDefaultClient(config)
+
+	testMessage := []byte{0xCA, 0xFE}
+	req, _, err := client.EncapsulateRequest(testMessage)
+	reqEnc := req.Marshal()
+
+	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "message/ohttp-req")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
+
+	if status := rr.Result().StatusCode; status != http.StatusForbidden {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusForbidden, status))
+	}
+}
+
+func TestGatewayHandlerBHTTPRequestWithForbiddenTarget(t *testing.T) {
+	target := createMockBhttpGatewayServer(t)
+
+	handler := http.HandlerFunc(target.gatewayHandler)
+
+	config, err := target.gateway.Config(FIXED_KEY_ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := ohttp.NewDefaultClient(config)
+
+	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", FORBIDDEN_TARGET, gatewayEndpoint), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binaryRequest := ohttp.BinaryRequest(*httpRequest)
+	encodedRequest, err := binaryRequest.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _, err := client.EncapsulateRequest(encodedRequest)
+	reqEnc := req.Marshal()
+
+	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "message/ohttp-req")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
+
+	if status := rr.Result().StatusCode; status != http.StatusForbidden {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusForbidden, status))
+	}
+}
+
+func TestGatewayHandlerBHTTPRequestWithAllowedTarget(t *testing.T) {
+	target := createMockBhttpGatewayServer(t)
+
+	handler := http.HandlerFunc(target.gatewayHandler)
+
+	config, err := target.gateway.Config(FIXED_KEY_ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := ohttp.NewDefaultClient(config)
+
+	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", ALLOWED_TARGET, gatewayEndpoint), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binaryRequest := ohttp.BinaryRequest(*httpRequest)
+	encodedRequest, err := binaryRequest.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _, err := client.EncapsulateRequest(encodedRequest)
+	reqEnc := req.Marshal()
+
+	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "message/ohttp-req")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
+
+	if status := rr.Result().StatusCode; status != http.StatusOK {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
 	}
 }

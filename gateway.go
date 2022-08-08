@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/chris-wood/ohttp-go"
 	"github.com/cisco/go-hpke"
@@ -30,6 +31,7 @@ const (
 
 	// Environment variables
 	secretSeedEnvironmentVariable  = "SEED_SECRET_KEY"
+	targetOriginAllowList          = "ALLOWED_TARGET_ORIGINS"
 	customRequestEncodingType      = "CUSTOM_REQUEST_TYPE"
 	customResponseEncodingType     = "CUSTOM_RESPONSE_TYPE"
 	certificateEnvironmentVariable = "CERT"
@@ -60,14 +62,18 @@ func (s gatewayServer) healthCheckHandler(w http.ResponseWriter, r *http.Request
 	fmt.Fprint(w, "ok")
 }
 
-func echoHandler(request []byte) ([]byte, error) {
+func echoHandler(request []byte, filter TargetFilter) ([]byte, error) {
 	return request, nil
 }
 
-func bhttpHandler(binaryRequest []byte) ([]byte, error) {
+func bhttpHandler(binaryRequest []byte, filter TargetFilter) ([]byte, error) {
 	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
 	if err != nil {
 		return nil, err
+	}
+
+	if !filter(request.Host) {
+		return nil, TargetForbiddenError
 	}
 
 	client := &http.Client{}
@@ -80,7 +86,7 @@ func bhttpHandler(binaryRequest []byte) ([]byte, error) {
 	return binaryResponse.Marshal()
 }
 
-func protobufHandler(binaryRequest []byte) ([]byte, error) {
+func protobufHandler(binaryRequest []byte, filter TargetFilter) ([]byte, error) {
 	request := &Request{}
 	if err := proto.Unmarshal(binaryRequest, request); err != nil {
 		return nil, err
@@ -89,6 +95,10 @@ func protobufHandler(binaryRequest []byte) ([]byte, error) {
 	targetRequest, err := protoHTTPToRequest(request)
 	if err != nil {
 		return nil, err
+	}
+
+	if !filter(targetRequest.Host) {
+		return nil, TargetForbiddenError
 	}
 
 	client := &http.Client{}
@@ -105,7 +115,7 @@ func protobufHandler(binaryRequest []byte) ([]byte, error) {
 	return proto.Marshal(response)
 }
 
-func customHandler(request []byte) ([]byte, error) {
+func customHandler(request []byte, filter TargetFilter) ([]byte, error) {
 	return nil, fmt.Errorf("Not implemented")
 }
 
@@ -126,6 +136,16 @@ func main() {
 	} else {
 		seed = make([]byte, defaultSeedLength)
 		rand.Read(seed)
+	}
+
+	var allowedOrigins map[string]bool
+	var originAllowList string
+	if originAllowList = os.Getenv(targetOriginAllowList); originAllowList != "" {
+		origins := strings.Split(originAllowList, ",")
+		allowedOrigins := make(map[string]bool)
+		for _, origin := range origins {
+			allowedOrigins[origin] = true
+		}
 	}
 
 	var certFile string
@@ -167,10 +187,11 @@ func main() {
 	handlers[gatewayEndpoint] = targetHandler // Content-specific handler
 	handlers[echoEndpoint] = echoHandler      // Content-agnostic handler
 	target := &gatewayResource{
-		verbose:  true,
-		keyID:    keyID,
-		gateway:  gateway,
-		handlers: handlers,
+		verbose:        true,
+		keyID:          keyID,
+		gateway:        gateway,
+		allowedOrigins: allowedOrigins,
+		handlers:       handlers,
 	}
 
 	endpoints := make(map[string]string)

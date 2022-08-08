@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -12,13 +13,17 @@ import (
 	"github.com/chris-wood/ohttp-go"
 )
 
-type ContentHandler func(request []byte) ([]byte, error)
+type TargetFilter func(targetOrigin string) bool
+type ContentHandler func(request []byte, filter TargetFilter) ([]byte, error)
+
+var TargetForbiddenError = errors.New("Target forbidden")
 
 type gatewayResource struct {
-	verbose  bool
-	keyID    uint8
-	gateway  ohttp.Gateway
-	handlers map[string]ContentHandler
+	verbose        bool
+	keyID          uint8
+	gateway        ohttp.Gateway
+	handlers       map[string]ContentHandler
+	allowedOrigins map[string]bool
 }
 
 const (
@@ -38,6 +43,14 @@ func (s *gatewayResource) parseEncapsulatedRequestFromContent(r *http.Request) (
 	}
 
 	return ohttp.UnmarshalEncapsulatedRequest(encryptedMessageBytes)
+}
+
+func (s *gatewayResource) checkAllowList(targetOrigin string) bool {
+	if s.allowedOrigins != nil {
+		_, ok := s.allowedOrigins[targetOrigin]
+		return ok // Allow if the origin is in the allowed list
+	}
+	return true
 }
 
 func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request) {
@@ -74,11 +87,17 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Dispatch to the content handler bound to the URL path
-	binaryResponse, err := handler(binaryRequest)
+	binaryResponse, err := handler(binaryRequest, s.checkAllowList)
 	if err != nil {
-		log.Println("Content handler failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
+		if err == TargetForbiddenError {
+			log.Println("Target forbidden:", err)
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return
+		} else {
+			log.Println("Content handler failed:", err)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
+		}
 	}
 
 	encapsulatedResponse, err := context.EncapsulateResponse(binaryResponse)
