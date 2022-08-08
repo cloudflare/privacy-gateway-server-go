@@ -42,7 +42,7 @@ func protobufHandler(binaryRequest []byte) ([]byte, error) {
 		return nil, err
 	}
 
-    // Convert the protohttp Request to a http.Request equivalent value
+        // Convert the protohttp Request to a http.Request equivalent value
 	targetRequest, err := protoHTTPToRequest(request)
 	if err != nil {
 		return nil, err
