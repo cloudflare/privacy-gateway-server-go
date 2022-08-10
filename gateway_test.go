@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/DataDog/datadog-go/v5/statsd"
 	"github.com/chris-wood/ohttp-go"
 	"github.com/cisco/go-hpke"
 )
@@ -61,6 +62,7 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 		allowedOrigins: map[string]bool{
 			ALLOWED_TARGET: true,
 		},
+		metricsFactory: createMockMetricsFactory(t),
 	}
 }
 
@@ -74,7 +76,12 @@ func createMockBhttpGatewayServer(t *testing.T) gatewayResource {
 		allowedOrigins: map[string]bool{
 			ALLOWED_TARGET: true,
 		},
+		metricsFactory: createMockMetricsFactory(t),
 	}
+}
+
+func createMockMetricsFactory(t *testing.T) MetricsFactory {
+	return CreateStatsDMetricsFactory("test", &statsd.NoOpClient{})
 }
 
 func TestConfigHandler(t *testing.T) {

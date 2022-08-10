@@ -24,6 +24,7 @@ type gatewayResource struct {
 	gateway        ohttp.Gateway
 	handlers       map[string]ContentHandler
 	allowedOrigins map[string]bool
+	metricsFactory MetricsFactory
 }
 
 const (
@@ -54,6 +55,8 @@ func (s *gatewayResource) checkAllowList(targetOrigin string) bool {
 }
 
 func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request) {
+	metrics := s.metricsFactory("gateway")
+
 	if s.verbose {
 		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	}
@@ -61,6 +64,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	if r.Header.Get("Content-Type") != ohttpRequestContentType {
 		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		metrics.Fire("invalid_content_type")
 		return
 	}
 
@@ -68,12 +72,14 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		log.Println("parseEncapsulatedRequestFromContent failed:", err)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		metrics.Fire("invalid_encapsulated_request")
 		return
 	}
 
 	if encapsulatedRequest.KeyID != s.keyID {
 		log.Printf("Invalid request key")
 		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		metrics.Fire("decapsulate_request_invalid_key_error")
 		return
 	}
 
@@ -81,6 +87,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		log.Println("DecapsulateRequest failed:", err)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		metrics.Fire("decapsulate_request_error")
 		return
 	}
 
@@ -89,6 +96,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	if handler, ok = s.handlers[r.URL.Path]; !ok {
 		log.Printf("Unknown handler for %s", r.URL.Path)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		metrics.Fire("unknown_handler")
 		return
 	}
 
@@ -98,10 +106,12 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 		if err == TargetForbiddenError {
 			log.Println("Target forbidden:", err)
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			metrics.Fire("forbidden_target")
 			return
 		} else {
 			log.Println("Content handler failed:", err)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			metrics.Fire("content_handler_error")
 			return
 		}
 	}
@@ -110,6 +120,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		log.Println("EncapsulateResponse failed:", err)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		metrics.Fire("encapsulate_response_error")
 		return
 	}
 	packedResponse := encapsulatedResponse.Marshal()
@@ -120,17 +131,22 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", ohttpResponseContentType)
 	w.Write(packedResponse)
+	metrics.Fire("success")
 }
 
 func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) {
+	metrics := s.metricsFactory("config")
+
 	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 
 	config, err := s.gateway.Config(s.keyID)
 	if err != nil {
 		log.Printf("Config unavailable")
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		metrics.Fire("config_unavailable_error")
 		return
 	}
 
 	w.Write(config.Marshal())
+	metrics.Fire("success")
 }

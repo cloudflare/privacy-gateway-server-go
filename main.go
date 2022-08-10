@@ -10,8 +10,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/DataDog/datadog-go/v5/statsd"
 	"github.com/chris-wood/ohttp-go"
 	"github.com/cisco/go-hpke"
 	"google.golang.org/protobuf/proto"
@@ -36,16 +39,23 @@ const (
 	customResponseEncodingType     = "CUSTOM_RESPONSE_TYPE"
 	certificateEnvironmentVariable = "CERT"
 	keyEnvironmentVariable         = "KEY"
+	statsdHostVariable             = "MONITORING_STATSD_HOST"
+	statsdPortVariable             = "MONITORING_STATSD_PORT"
+	statsdTimeoutVariable          = "MONITORING_STATSD_TIMEOUT_MS"
 )
 
 type gatewayServer struct {
-	requestLabel  string
-	responseLabel string
-	endpoints     map[string]string
-	target        *gatewayResource
+	requestLabel   string
+	responseLabel  string
+	endpoints      map[string]string
+	target         *gatewayResource
+	metricsFactory MetricsFactory
 }
 
+type ExtendedContentHandler func(metricsCollectorFactory MetricsFactory, request []byte, filter TargetFilter) ([]byte, error)
+
 func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
+	metrics := s.metricsFactory("index")
 	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	fmt.Fprint(w, "OHTTP Gateway\n")
 	fmt.Fprint(w, "----------------\n")
@@ -55,68 +65,124 @@ func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "   Response content type: %s\n", s.responseLabel)
 	fmt.Fprintf(w, "Echo endpoint: https://%s%s\n", r.Host, s.endpoints["Echo"])
 	fmt.Fprint(w, "----------------\n")
+	metrics.Fire("success")
 }
 
 func (s gatewayServer) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
+	metrics := s.metricsFactory("health_check")
 	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	fmt.Fprint(w, "ok")
+	metrics.Fire("success")
 }
 
-func echoHandler(request []byte, filter TargetFilter) ([]byte, error) {
+func echoHandler(_ MetricsFactory, request []byte, filter TargetFilter) ([]byte, error) {
 	return request, nil
 }
 
-func bhttpHandler(binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+func bhttpHandler(metricsCollectorFactory MetricsFactory, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+	metrics := metricsCollectorFactory("content_bhttp_handler")
+
 	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
 	if err != nil {
+		metrics.Fire("request_unmarshal_error")
 		return nil, err
 	}
 
 	if !filter(request.Host) {
+		metrics.Fire("request_forbidden_error")
 		return nil, TargetForbiddenError
 	}
 
 	client := &http.Client{}
-	response, err := client.Do(request)
+	targetResponse, err := client.Do(request)
 	if err != nil {
+		metrics.Fire("request_external_services_error")
 		return nil, err
 	}
 
-	binaryResponse := ohttp.CreateBinaryResponse(response)
-	return binaryResponse.Marshal()
+	binaryResponse := ohttp.CreateBinaryResponse(targetResponse)
+
+	response, err := binaryResponse.Marshal()
+
+	if err != nil {
+		metrics.Fire("response_marshal_error")
+		return nil, err
+	}
+
+	metrics.Fire("success")
+	return response, nil
 }
 
-func protobufHandler(binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+func protobufHandler(metricsFactory MetricsFactory, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+	metrics := metricsFactory("content_protobuf_handler")
+
 	request := &Request{}
 	if err := proto.Unmarshal(binaryRequest, request); err != nil {
+		metrics.Fire("request_unmarshal_error")
 		return nil, err
 	}
 
 	targetRequest, err := protoHTTPToRequest(request)
 	if err != nil {
+		metrics.Fire("protobuf_decode_error")
 		return nil, err
 	}
 
 	if !filter(targetRequest.Host) {
+		metrics.Fire("request_forbidden_error")
 		return nil, TargetForbiddenError
 	}
 
 	client := &http.Client{}
 	targetResponse, err := client.Do(targetRequest)
 	if err != nil {
+		metrics.Fire("request_external_services_error")
 		return nil, err
 	}
 
-	response, err := responseToProtoHTTP(targetResponse)
+	protoResponse, err := responseToProtoHTTP(targetResponse)
 	if err != nil {
+		metrics.Fire("protobuf_encode_error")
 		return nil, err
 	}
 
-	return proto.Marshal(response)
+	response, err := proto.Marshal(protoResponse)
+
+	if err != nil {
+		metrics.Fire("response_marshal_error")
+		return nil, err
+	}
+
+	metrics.Fire("success")
+	return response, nil
 }
 
-func customHandler(request []byte, filter TargetFilter) ([]byte, error) {
+func customHandler(_ MetricsFactory, request []byte, filter TargetFilter) ([]byte, error) {
 	return nil, fmt.Errorf("Not implemented")
+}
+
+func metricsContentHandlerWrapper(metricsFactory MetricsFactory, handler ExtendedContentHandler) ContentHandler {
+	return func(request []byte, filter TargetFilter) ([]byte, error) {
+		return handler(metricsFactory, request, filter)
+	}
+}
+
+func getStatsDClient() (statsd.ClientInterface, error) {
+	host := os.Getenv(statsdHostVariable)
+	port := os.Getenv(statsdPortVariable)
+
+	timeout, err := strconv.ParseInt(os.Getenv(statsdTimeoutVariable), 10, 64)
+
+	if err != nil {
+		log.Print("Can't parse timeout -- use the default value (100 ms)")
+		timeout = 100
+	}
+
+	if host == "" || port == "" {
+		return &statsd.NoOpClient{}, nil
+	}
+
+	return statsd.New(host+":"+port, statsd.WithWriteTimeout(time.Duration(timeout)*time.Millisecond), statsd.WithoutTelemetry())
 }
 
 func main() {
@@ -167,7 +233,7 @@ func main() {
 	}
 
 	var gateway ohttp.Gateway
-	var targetHandler ContentHandler
+	var targetHandler ExtendedContentHandler
 	requestLabel := os.Getenv(customRequestEncodingType)
 	responseLabel := os.Getenv(customResponseEncodingType)
 	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
@@ -183,9 +249,15 @@ func main() {
 		targetHandler = customHandler
 	}
 
+	statsd_client, err := getStatsDClient()
+	if err != nil {
+		log.Fatalf("Failed to create statsd client: %s", err)
+	}
+	metricsFactory := CreateStatsDMetricsFactory("ohttp_gateway", statsd_client)
+
 	handlers := make(map[string]ContentHandler)
-	handlers[gatewayEndpoint] = targetHandler // Content-specific handler
-	handlers[echoEndpoint] = echoHandler      // Content-agnostic handler
+	handlers[gatewayEndpoint] = metricsContentHandlerWrapper(metricsFactory, targetHandler) // Content-specific handler
+	handlers[echoEndpoint] = metricsContentHandlerWrapper(metricsFactory, echoHandler)      // Content-agnostic handler
 	target := &gatewayResource{
 		verbose:        true,
 		keyID:          keyID,
@@ -200,10 +272,11 @@ func main() {
 	endpoints["Config"] = configEndpoint
 
 	server := gatewayServer{
-		requestLabel:  requestLabel,
-		responseLabel: responseLabel,
-		endpoints:     endpoints,
-		target:        target,
+		requestLabel:   requestLabel,
+		responseLabel:  responseLabel,
+		endpoints:      endpoints,
+		target:         target,
+		metricsFactory: metricsFactory,
 	}
 
 	http.HandleFunc(gatewayEndpoint, server.target.gatewayHandler)
