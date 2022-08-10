@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"strconv"
 	"strings"
@@ -26,11 +27,12 @@ const (
 	defaultSeedLength = 32
 
 	// HTTP constants. Fill in your proxy and target here.
-	defaultPort     = "8080"
-	gatewayEndpoint = "/gateway"
-	echoEndpoint    = "/gateway-echo"
-	healthEndpoint  = "/health"
-	configEndpoint  = "/ohttp-configs"
+	defaultPort      = "8080"
+	gatewayEndpoint  = "/gateway"
+	echoEndpoint     = "/gateway-echo"
+	metadataEndpoint = "/gateway-metadata"
+	healthEndpoint   = "/health"
+	configEndpoint   = "/ohttp-configs"
 
 	// Environment variables
 	secretSeedEnvironmentVariable  = "SEED_SECRET_KEY"
@@ -52,7 +54,7 @@ type gatewayServer struct {
 	metricsFactory MetricsFactory
 }
 
-type ExtendedContentHandler func(metricsCollectorFactory MetricsFactory, request []byte, filter TargetFilter) ([]byte, error)
+type ExtendedContentHandler func(metricsCollectorFactory MetricsFactory, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error)
 
 func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 	metrics := s.metricsFactory("index")
@@ -75,11 +77,24 @@ func (s gatewayServer) healthCheckHandler(w http.ResponseWriter, r *http.Request
 	metrics.Fire("success")
 }
 
-func echoHandler(_ MetricsFactory, request []byte, filter TargetFilter) ([]byte, error) {
-	return request, nil
+func echoHandler(_ MetricsFactory, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
+	return requestBody, nil
 }
 
-func bhttpHandler(metricsCollectorFactory MetricsFactory, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+func metadataHandler(metricsFactory MetricsFactory, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
+	metrics := metricsFactory("metadata_handler")
+
+	response, err := httputil.DumpRequest(request, true)
+
+	if err != nil {
+		metrics.Fire("metadata_dump_request_error")
+		return nil, err
+	}
+
+	return response, nil
+}
+
+func bhttpHandler(metricsCollectorFactory MetricsFactory, request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
 	metrics := metricsCollectorFactory("content_bhttp_handler")
 
 	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
@@ -113,16 +128,16 @@ func bhttpHandler(metricsCollectorFactory MetricsFactory, binaryRequest []byte, 
 	return response, nil
 }
 
-func protobufHandler(metricsFactory MetricsFactory, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+func protobufHandler(metricsFactory MetricsFactory, request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
 	metrics := metricsFactory("content_protobuf_handler")
 
-	request := &Request{}
-	if err := proto.Unmarshal(binaryRequest, request); err != nil {
+	req := &Request{}
+	if err := proto.Unmarshal(binaryRequest, req); err != nil {
 		metrics.Fire("request_unmarshal_error")
 		return nil, err
 	}
 
-	targetRequest, err := protoHTTPToRequest(request)
+	targetRequest, err := protoHTTPToRequest(req)
 	if err != nil {
 		metrics.Fire("protobuf_decode_error")
 		return nil, err
@@ -157,13 +172,13 @@ func protobufHandler(metricsFactory MetricsFactory, binaryRequest []byte, filter
 	return response, nil
 }
 
-func customHandler(_ MetricsFactory, request []byte, filter TargetFilter) ([]byte, error) {
+func customHandler(_ MetricsFactory, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
 	return nil, fmt.Errorf("Not implemented")
 }
 
 func metricsContentHandlerWrapper(metricsFactory MetricsFactory, handler ExtendedContentHandler) ContentHandler {
-	return func(request []byte, filter TargetFilter) ([]byte, error) {
-		return handler(metricsFactory, request, filter)
+	return func(request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
+		return handler(metricsFactory, request, requestBody, filter)
 	}
 }
 
@@ -256,8 +271,9 @@ func main() {
 	metricsFactory := CreateStatsDMetricsFactory("ohttp_gateway", statsd_client)
 
 	handlers := make(map[string]ContentHandler)
-	handlers[gatewayEndpoint] = metricsContentHandlerWrapper(metricsFactory, targetHandler) // Content-specific handler
-	handlers[echoEndpoint] = metricsContentHandlerWrapper(metricsFactory, echoHandler)      // Content-agnostic handler
+	handlers[gatewayEndpoint] = metricsContentHandlerWrapper(metricsFactory, targetHandler)    // Content-specific handler
+	handlers[echoEndpoint] = metricsContentHandlerWrapper(metricsFactory, echoHandler)         // Content-agnostic handler
+	handlers[metadataEndpoint] = metricsContentHandlerWrapper(metricsFactory, metadataHandler) // Metadata handler
 	target := &gatewayResource{
 		verbose:        true,
 		keyID:          keyID,
@@ -281,6 +297,7 @@ func main() {
 
 	http.HandleFunc(gatewayEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(echoEndpoint, server.target.gatewayHandler)
+	http.HandleFunc(metadataEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(healthEndpoint, server.healthCheckHandler)
 	http.HandleFunc(configEndpoint, target.configHandler)
 	http.HandleFunc("/", server.indexHandler)
