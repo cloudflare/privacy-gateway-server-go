@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"strings"
 
@@ -23,11 +24,12 @@ const (
 	defaultSeedLength = 32
 
 	// HTTP constants. Fill in your proxy and target here.
-	defaultPort     = "8080"
-	gatewayEndpoint = "/gateway"
-	echoEndpoint    = "/gateway-echo"
-	healthEndpoint  = "/health"
-	configEndpoint  = "/ohttp-configs"
+	defaultPort      = "8080"
+	gatewayEndpoint  = "/gateway"
+	echoEndpoint     = "/gateway-echo"
+	metadataEndpoint = "/gateway-metadata"
+	healthEndpoint   = "/health"
+	configEndpoint   = "/ohttp-configs"
 
 	// Environment variables
 	secretSeedEnvironmentVariable  = "SEED_SECRET_KEY"
@@ -62,11 +64,15 @@ func (s gatewayServer) healthCheckHandler(w http.ResponseWriter, r *http.Request
 	fmt.Fprint(w, "ok")
 }
 
-func echoHandler(request []byte, filter TargetFilter) ([]byte, error) {
-	return request, nil
+func echoHandler(request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
+	return requestBody, nil
 }
 
-func bhttpHandler(binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+func metadataHandler(request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
+	return httputil.DumpRequest(request, true)
+}
+
+func bhttpHandler(request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
 	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
 	if err != nil {
 		return nil, err
@@ -86,13 +92,13 @@ func bhttpHandler(binaryRequest []byte, filter TargetFilter) ([]byte, error) {
 	return binaryResponse.Marshal()
 }
 
-func protobufHandler(binaryRequest []byte, filter TargetFilter) ([]byte, error) {
-	request := &Request{}
-	if err := proto.Unmarshal(binaryRequest, request); err != nil {
+func protobufHandler(request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+	req := &Request{}
+	if err := proto.Unmarshal(binaryRequest, req); err != nil {
 		return nil, err
 	}
 
-	targetRequest, err := protoHTTPToRequest(request)
+	targetRequest, err := protoHTTPToRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +121,7 @@ func protobufHandler(binaryRequest []byte, filter TargetFilter) ([]byte, error) 
 	return proto.Marshal(response)
 }
 
-func customHandler(request []byte, filter TargetFilter) ([]byte, error) {
+func customHandler(request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
 	return nil, fmt.Errorf("Not implemented")
 }
 
@@ -184,8 +190,9 @@ func main() {
 	}
 
 	handlers := make(map[string]ContentHandler)
-	handlers[gatewayEndpoint] = targetHandler // Content-specific handler
-	handlers[echoEndpoint] = echoHandler      // Content-agnostic handler
+	handlers[gatewayEndpoint] = targetHandler    // Content-specific handler
+	handlers[echoEndpoint] = echoHandler         // Content-agnostic handler
+	handlers[metadataEndpoint] = metadataHandler // Metadata handler
 	target := &gatewayResource{
 		verbose:        true,
 		keyID:          keyID,
@@ -208,6 +215,7 @@ func main() {
 
 	http.HandleFunc(gatewayEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(echoEndpoint, server.target.gatewayHandler)
+	http.HandleFunc(metadataEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(healthEndpoint, server.healthCheckHandler)
 	http.HandleFunc(configEndpoint, target.configHandler)
 	http.HandleFunc("/", server.indexHandler)

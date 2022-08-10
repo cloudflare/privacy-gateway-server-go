@@ -30,15 +30,15 @@ func createGateway(t *testing.T) ohttp.Gateway {
 	return ohttp.NewDefaultGateway(config)
 }
 
-func testEchoHandler(request []byte, filter TargetFilter) ([]byte, error) {
+func testEchoHandler(r *http.Request, request []byte, filter TargetFilter) ([]byte, error) {
 	return request, nil
 }
 
-func testForbiddenEchoHandler(request []byte, filter TargetFilter) ([]byte, error) {
+func testForbiddenEchoHandler(r *http.Request, request []byte, filter TargetFilter) ([]byte, error) {
 	return nil, TargetForbiddenError
 }
 
-func testBhttpHandler(binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+func testBhttpHandler(r *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
 	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
 	if err != nil {
 		return nil, err
