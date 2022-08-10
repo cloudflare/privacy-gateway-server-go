@@ -71,6 +71,12 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if encapsulatedRequest.KeyID != s.keyID {
+		log.Printf("Invalid request key")
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return
+	}
+
 	binaryRequest, context, err := s.gateway.DecapsulateRequest(encapsulatedRequest)
 	if err != nil {
 		log.Println("DecapsulateRequest failed:", err)
