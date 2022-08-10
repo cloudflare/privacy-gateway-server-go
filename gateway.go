@@ -4,220 +4,127 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
-	"strings"
 
 	"github.com/chris-wood/ohttp-go"
-	"github.com/cisco/go-hpke"
-	"google.golang.org/protobuf/proto"
 )
+
+type TargetFilter func(targetOrigin string) bool
+type ContentHandler func(request []byte, filter TargetFilter) ([]byte, error)
+
+var TargetForbiddenError = errors.New("Target forbidden")
+
+type gatewayResource struct {
+	verbose        bool
+	keyID          uint8
+	gateway        ohttp.Gateway
+	handlers       map[string]ContentHandler
+	allowedOrigins map[string]bool
+}
 
 const (
-	// keying material (seed) should have as many bits of entropy as the bit
-	// length of the x25519 secret key
-	defaultSeedLength = 32
-
-	// HTTP constants. Fill in your proxy and target here.
-	defaultPort     = "8080"
-	gatewayEndpoint = "/gateway"
-	echoEndpoint    = "/gateway-echo"
-	healthEndpoint  = "/health"
-	configEndpoint  = "/ohttp-configs"
-
-	// Environment variables
-	secretSeedEnvironmentVariable  = "SEED_SECRET_KEY"
-	targetOriginAllowList          = "ALLOWED_TARGET_ORIGINS"
-	customRequestEncodingType      = "CUSTOM_REQUEST_TYPE"
-	customResponseEncodingType     = "CUSTOM_RESPONSE_TYPE"
-	certificateEnvironmentVariable = "CERT"
-	keyEnvironmentVariable         = "KEY"
+	ohttpRequestContentType  = "message/ohttp-req"
+	ohttpResponseContentType = "message/ohttp-res"
 )
 
-type gatewayServer struct {
-	requestLabel  string
-	responseLabel string
-	endpoints     map[string]string
-	target        *gatewayResource
-}
+func (s *gatewayResource) parseEncapsulatedRequestFromContent(r *http.Request) (ohttp.EncapsulatedRequest, error) {
+	if r.Method != http.MethodPost {
+		return ohttp.EncapsulatedRequest{}, fmt.Errorf("Unsupported HTTP method for Oblivious DNS query: %s", r.Method)
+	}
 
-func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
-	fmt.Fprint(w, "OHTTP Gateway\n")
-	fmt.Fprint(w, "----------------\n")
-	fmt.Fprintf(w, "Config endpoint: https://%s%s\n", r.Host, s.endpoints["Config"])
-	fmt.Fprintf(w, "Target endpoint: https://%s%s\n", r.Host, s.endpoints["Target"])
-	fmt.Fprintf(w, "   Request content type:  %s\n", s.requestLabel)
-	fmt.Fprintf(w, "   Response content type: %s\n", s.responseLabel)
-	fmt.Fprintf(w, "Echo endpoint: https://%s%s\n", r.Host, s.endpoints["Echo"])
-	fmt.Fprint(w, "----------------\n")
-}
-
-func (s gatewayServer) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
-	fmt.Fprint(w, "ok")
-}
-
-func echoHandler(request []byte, filter TargetFilter) ([]byte, error) {
-	return request, nil
-}
-
-func bhttpHandler(binaryRequest []byte, filter TargetFilter) ([]byte, error) {
-	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
+	defer r.Body.Close()
+	encryptedMessageBytes, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		return nil, err
+		return ohttp.EncapsulatedRequest{}, err
 	}
 
-	if !filter(request.Host) {
-		return nil, TargetForbiddenError
-	}
-
-	client := &http.Client{}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-
-	binaryResponse := ohttp.CreateBinaryResponse(response)
-	return binaryResponse.Marshal()
+	return ohttp.UnmarshalEncapsulatedRequest(encryptedMessageBytes)
 }
 
-func protobufHandler(binaryRequest []byte, filter TargetFilter) ([]byte, error) {
-	request := &Request{}
-	if err := proto.Unmarshal(binaryRequest, request); err != nil {
-		return nil, err
+func (s *gatewayResource) checkAllowList(targetOrigin string) bool {
+	if s.allowedOrigins != nil {
+		_, ok := s.allowedOrigins[targetOrigin]
+		return ok // Allow if the origin is in the allowed list
 	}
-
-	targetRequest, err := protoHTTPToRequest(request)
-	if err != nil {
-		return nil, err
-	}
-
-	if !filter(targetRequest.Host) {
-		return nil, TargetForbiddenError
-	}
-
-	client := &http.Client{}
-	targetResponse, err := client.Do(targetRequest)
-	if err != nil {
-		return nil, err
-	}
-
-	response, err := responseToProtoHTTP(targetResponse)
-	if err != nil {
-		return nil, err
-	}
-
-	return proto.Marshal(response)
+	return true
 }
 
-func customHandler(request []byte, filter TargetFilter) ([]byte, error) {
-	return nil, fmt.Errorf("Not implemented")
-}
-
-func main() {
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = defaultPort
+func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request) {
+	if s.verbose {
+		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	}
 
-	var seed []byte
-	if seedHex := os.Getenv(secretSeedEnvironmentVariable); seedHex != "" {
-		log.Printf("Using Secret Key Seed : [%v]", seedHex)
-		var err error
-		seed, err = hex.DecodeString(seedHex)
-		if err != nil {
-			panic(err)
-		}
-	} else {
-		seed = make([]byte, defaultSeedLength)
-		rand.Read(seed)
+	if r.Header.Get("Content-Type") != ohttpRequestContentType {
+		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
 	}
 
-	var allowedOrigins map[string]bool
-	var originAllowList string
-	if originAllowList = os.Getenv(targetOriginAllowList); originAllowList != "" {
-		origins := strings.Split(originAllowList, ",")
-		allowedOrigins := make(map[string]bool)
-		for _, origin := range origins {
-			allowedOrigins[origin] = true
+	encapsulatedRequest, err := s.parseEncapsulatedRequestFromContent(r)
+	if err != nil {
+		log.Println("parseEncapsulatedRequestFromContent failed:", err)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	binaryRequest, context, err := s.gateway.DecapsulateRequest(encapsulatedRequest)
+	if err != nil {
+		log.Println("DecapsulateRequest failed:", err)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	var handler ContentHandler
+	var ok bool
+	if handler, ok = s.handlers[r.URL.Path]; !ok {
+		log.Printf("Unknown handler for %s", r.URL.Path)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	// Dispatch to the content handler bound to the URL path
+	binaryResponse, err := handler(binaryRequest, s.checkAllowList)
+	if err != nil {
+		if err == TargetForbiddenError {
+			log.Println("Target forbidden:", err)
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return
+		} else {
+			log.Println("Content handler failed:", err)
+			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			return
 		}
 	}
 
-	var certFile string
-	if certFile = os.Getenv(certificateEnvironmentVariable); certFile == "" {
-		certFile = "cert.pem"
-	}
-
-	var keyFile string
-	enableTLSServe := true
-	if keyFile = os.Getenv(keyEnvironmentVariable); keyFile == "" {
-		keyFile = "key.pem"
-		enableTLSServe = false
-	}
-
-	keyID := uint8(0x00)
-	config, err := ohttp.NewConfigFromSeed(keyID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128, seed)
+	encapsulatedResponse, err := context.EncapsulateResponse(binaryResponse)
 	if err != nil {
-		log.Fatalf("Failed to create gateway configuration from seed: %s", err)
+		log.Println("EncapsulateResponse failed:", err)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+	packedResponse := encapsulatedResponse.Marshal()
+
+	if s.verbose {
+		log.Printf("Target response: %x", packedResponse)
 	}
 
-	var gateway ohttp.Gateway
-	var targetHandler ContentHandler
-	requestLabel := os.Getenv(customRequestEncodingType)
-	responseLabel := os.Getenv(customResponseEncodingType)
-	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
-		gateway = ohttp.NewDefaultGateway(config)
-		requestLabel = "message/bhttp request"
-		responseLabel = "message/bhttp response"
-		targetHandler = bhttpHandler
-	} else if requestLabel == "message/protohttp request" && responseLabel == "message/protohttp response" {
-		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
-		targetHandler = protobufHandler
-	} else {
-		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
-		targetHandler = customHandler
+	w.Header().Set("Content-Type", ohttpResponseContentType)
+	w.Write(packedResponse)
+}
+
+func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) {
+	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
+
+	config, err := s.gateway.Config(s.keyID)
+	if err != nil {
+		log.Printf("Config unavailable")
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
 	}
 
-	handlers := make(map[string]ContentHandler)
-	handlers[gatewayEndpoint] = targetHandler // Content-specific handler
-	handlers[echoEndpoint] = echoHandler      // Content-agnostic handler
-	target := &gatewayResource{
-		verbose:        true,
-		keyID:          keyID,
-		gateway:        gateway,
-		allowedOrigins: allowedOrigins,
-		handlers:       handlers,
-	}
-
-	endpoints := make(map[string]string)
-	endpoints["Target"] = gatewayEndpoint
-	endpoints["Health"] = healthEndpoint
-	endpoints["Config"] = configEndpoint
-
-	server := gatewayServer{
-		requestLabel:  requestLabel,
-		responseLabel: responseLabel,
-		endpoints:     endpoints,
-		target:        target,
-	}
-
-	http.HandleFunc(gatewayEndpoint, server.target.gatewayHandler)
-	http.HandleFunc(echoEndpoint, server.target.gatewayHandler)
-	http.HandleFunc(healthEndpoint, server.healthCheckHandler)
-	http.HandleFunc(configEndpoint, target.configHandler)
-	http.HandleFunc("/", server.indexHandler)
-
-	if enableTLSServe {
-		log.Printf("Listening on port %v with cert %v and key %v\n", port, certFile, keyFile)
-		log.Fatal(http.ListenAndServeTLS(fmt.Sprintf(":%s", port), certFile, keyFile, nil))
-	} else {
-		log.Printf("Listening on port %v without enabling TLS\n", port)
-		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", port), nil))
-	}
-
+	w.Write(config.Marshal())
 }
