@@ -216,6 +216,35 @@ func TestGatewayHandlerWithInvalidKey(t *testing.T) {
 	}
 }
 
+func TestGatewayHandlerWithUnknownKey(t *testing.T) {
+	target := createMockEchoGatewayServer(t)
+
+	handler := http.HandlerFunc(target.gatewayHandler)
+
+	// Generate a new config that's different from the target's in the key ID
+	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID^0xFF, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+	if err != nil {
+		t.Fatal("Failed to create a valid config. Exiting now.")
+	}
+	client := ohttp.NewDefaultClient(privateConfig.Config())
+
+	testMessage := []byte{0xCA, 0xFE}
+	req, _, err := client.EncapsulateRequest(testMessage)
+
+	request, err := http.NewRequest(http.MethodPost, echoEndpoint, bytes.NewReader(req.Marshal()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "message/ohttp-req")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
+
+	if status := rr.Result().StatusCode; status != http.StatusUnauthorized {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusUnauthorized, status))
+	}
+}
+
 func TestGatewayHandlerWithCorruptContent(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
 
