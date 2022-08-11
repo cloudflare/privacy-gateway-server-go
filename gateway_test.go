@@ -13,6 +13,7 @@ import (
 
 	"github.com/chris-wood/ohttp-go"
 	"github.com/cisco/go-hpke"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -30,50 +31,45 @@ func createGateway(t *testing.T) ohttp.Gateway {
 	return ohttp.NewDefaultGateway(config)
 }
 
-func testEchoHandler(r *http.Request, request []byte, filter TargetFilter) ([]byte, error) {
-	return request, nil
+type ForbiddenCheckHttpRequestHandler struct {
+	forbidden string
 }
 
-func testForbiddenEchoHandler(r *http.Request, request []byte, filter TargetFilter) ([]byte, error) {
-	return nil, TargetForbiddenError
-}
-
-func testBhttpHandler(r *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
-	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
-	if err != nil {
-		return nil, err
-	}
-
-	if !filter(request.Host) {
+func (h ForbiddenCheckHttpRequestHandler) Handle(req *http.Request) (*http.Response, error) {
+	if req.Host == h.forbidden {
 		return nil, TargetForbiddenError
 	}
-
-	return binaryRequest, nil
+	return &http.Response{
+		StatusCode: http.StatusOK,
+	}, nil
 }
 
 func createMockEchoGatewayServer(t *testing.T) gatewayResource {
-	handlers := make(map[string]ContentHandler)
-	handlers[echoEndpoint] = testEchoHandler
-	handlers[gatewayEndpoint] = testForbiddenEchoHandler
-	return gatewayResource{
-		gateway:  createGateway(t),
-		handlers: handlers,
-		allowedOrigins: map[string]bool{
-			ALLOWED_TARGET: true,
+	gateway := createGateway(t)
+	echoEncapHandler := DefaultEncapsulationHandler{
+		keyID:      FIXED_KEY_ID,
+		gateway:    gateway,
+		appHandler: EchoAppHandler{},
+	}
+	mockProtoHTTPFilterHandler := DefaultEncapsulationHandler{
+		keyID:   FIXED_KEY_ID,
+		gateway: gateway,
+		appHandler: ProtoHTTPEncapsulationHandler{
+			httpHandler: ForbiddenCheckHttpRequestHandler{
+				FORBIDDEN_TARGET,
+			},
 		},
 	}
-}
 
-func createMockBhttpGatewayServer(t *testing.T) gatewayResource {
-	handlers := make(map[string]ContentHandler)
-	handlers[echoEndpoint] = testEchoHandler
-	handlers[gatewayEndpoint] = testBhttpHandler
+	encapHandlers := make(map[string]EncapsulationHandler)
+	encapHandlers[echoEndpoint] = echoEncapHandler
+	encapHandlers[gatewayEndpoint] = mockProtoHTTPFilterHandler
 	return gatewayResource{
-		gateway:  createGateway(t),
-		handlers: handlers,
+		gateway: gateway,
 		allowedOrigins: map[string]bool{
 			ALLOWED_TARGET: true,
 		},
+		encapsulationHandlers: encapHandlers,
 	}
 }
 
@@ -114,7 +110,7 @@ func TestQueryHandlerInvalidContentType(t *testing.T) {
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
-	request, err := http.NewRequest("GET", gatewayEndpoint, nil)
+	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,37 +272,8 @@ func TestGatewayHandlerWithCorruptContent(t *testing.T) {
 	}
 }
 
-func TestGatewayHandlerWithForbiddenTarget(t *testing.T) {
+func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
-
-	handler := http.HandlerFunc(target.gatewayHandler)
-
-	config, err := target.gateway.Config(FIXED_KEY_ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := ohttp.NewDefaultClient(config)
-
-	testMessage := []byte{0xCA, 0xFE}
-	req, _, err := client.EncapsulateRequest(testMessage)
-	reqEnc := req.Marshal()
-
-	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Add("Content-Type", "message/ohttp-req")
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, request)
-
-	if status := rr.Result().StatusCode; status != http.StatusForbidden {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusForbidden, status))
-	}
-}
-
-func TestGatewayHandlerBHTTPRequestWithForbiddenTarget(t *testing.T) {
-	target := createMockBhttpGatewayServer(t)
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
@@ -321,12 +288,16 @@ func TestGatewayHandlerBHTTPRequestWithForbiddenTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	binaryRequest := ohttp.BinaryRequest(*httpRequest)
-	encodedRequest, err := binaryRequest.Marshal()
+	binaryRequest, err := requestToProtoHTTP(httpRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, _, err := client.EncapsulateRequest(encodedRequest)
+
+	encodedRequest, err := proto.Marshal(binaryRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, context, err := client.EncapsulateRequest(encodedRequest)
 	reqEnc := req.Marshal()
 
 	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
@@ -338,13 +309,37 @@ func TestGatewayHandlerBHTTPRequestWithForbiddenTarget(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, request)
 
-	if status := rr.Result().StatusCode; status != http.StatusForbidden {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusForbidden, status))
+	if status := rr.Result().StatusCode; status != http.StatusOK {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+	}
+
+	bodyBytes, err := ioutil.ReadAll(rr.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	encapResp, err := ohttp.UnmarshalEncapsulatedResponse(bodyBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binaryResp, err := context.DecapsulateResponse(encapResp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := &Response{}
+	if err := proto.Unmarshal(binaryResp, resp); err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusForbidden, resp.StatusCode))
 	}
 }
 
-func TestGatewayHandlerBHTTPRequestWithAllowedTarget(t *testing.T) {
-	target := createMockBhttpGatewayServer(t)
+func TestGatewayHandlerProtoHTTPRequestWithAllowedTarget(t *testing.T) {
+	target := createMockEchoGatewayServer(t)
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
@@ -359,12 +354,16 @@ func TestGatewayHandlerBHTTPRequestWithAllowedTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	binaryRequest := ohttp.BinaryRequest(*httpRequest)
-	encodedRequest, err := binaryRequest.Marshal()
+	binaryRequest, err := requestToProtoHTTP(httpRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, _, err := client.EncapsulateRequest(encodedRequest)
+
+	encodedRequest, err := proto.Marshal(binaryRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, context, err := client.EncapsulateRequest(encodedRequest)
 	reqEnc := req.Marshal()
 
 	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
@@ -378,5 +377,33 @@ func TestGatewayHandlerBHTTPRequestWithAllowedTarget(t *testing.T) {
 
 	if status := rr.Result().StatusCode; status != http.StatusOK {
 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+	}
+
+	if status := rr.Result().StatusCode; status != http.StatusOK {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+	}
+
+	bodyBytes, err := ioutil.ReadAll(rr.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	encapResp, err := ohttp.UnmarshalEncapsulatedResponse(bodyBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binaryResp, err := context.DecapsulateResponse(encapResp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := &Response{}
+	if err := proto.Unmarshal(binaryResp, resp); err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusOK, resp.StatusCode))
 	}
 }

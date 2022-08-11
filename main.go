@@ -9,13 +9,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/http/httputil"
 	"os"
 	"strings"
 
 	"github.com/chris-wood/ohttp-go"
 	"github.com/cisco/go-hpke"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -56,73 +54,13 @@ func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "   Request content type:  %s\n", s.requestLabel)
 	fmt.Fprintf(w, "   Response content type: %s\n", s.responseLabel)
 	fmt.Fprintf(w, "Echo endpoint: https://%s%s\n", r.Host, s.endpoints["Echo"])
+	fmt.Fprintf(w, "Metadata endpoint: https://%s%s\n", r.Host, s.endpoints["Metadata"])
 	fmt.Fprint(w, "----------------\n")
 }
 
 func (s gatewayServer) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	fmt.Fprint(w, "ok")
-}
-
-func echoHandler(request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
-	return requestBody, nil
-}
-
-func metadataHandler(request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
-	return httputil.DumpRequest(request, false)
-}
-
-func bhttpHandler(request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
-	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
-	if err != nil {
-		return nil, err
-	}
-
-	if !filter(request.Host) {
-		return nil, TargetForbiddenError
-	}
-
-	client := &http.Client{}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-
-	binaryResponse := ohttp.CreateBinaryResponse(response)
-	return binaryResponse.Marshal()
-}
-
-func protobufHandler(request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
-	req := &Request{}
-	if err := proto.Unmarshal(binaryRequest, req); err != nil {
-		return nil, err
-	}
-
-	targetRequest, err := protoHTTPToRequest(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if !filter(targetRequest.Host) {
-		return nil, TargetForbiddenError
-	}
-
-	client := &http.Client{}
-	targetResponse, err := client.Do(targetRequest)
-	if err != nil {
-		return nil, err
-	}
-
-	response, err := responseToProtoHTTP(targetResponse)
-	if err != nil {
-		return nil, err
-	}
-
-	return proto.Marshal(response)
-}
-
-func customHandler(request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
-	return nil, fmt.Errorf("Not implemented")
 }
 
 func main() {
@@ -166,45 +104,78 @@ func main() {
 		enableTLSServe = false
 	}
 
-	keyID := uint8(0x00)
+	keyID := uint8(0x00) // XXX(caw): make this an environment variable, too, or derive it from the seed
 	config, err := ohttp.NewConfigFromSeed(keyID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128, seed)
 	if err != nil {
 		log.Fatalf("Failed to create gateway configuration from seed: %s", err)
 	}
 
+	// Create the default HTTP handler
+	httpHandler := FilteredHttpRequestHandler{
+		client:         &http.Client{},
+		allowedOrigins: allowedOrigins,
+	}
+
+	// Create the default gateway and its request handler chain
 	var gateway ohttp.Gateway
-	var targetHandler ContentHandler
+	var targetHandler EncapsulationHandler
 	requestLabel := os.Getenv(customRequestEncodingType)
 	responseLabel := os.Getenv(customResponseEncodingType)
 	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
 		gateway = ohttp.NewDefaultGateway(config)
 		requestLabel = "message/bhttp request"
 		responseLabel = "message/bhttp response"
-		targetHandler = bhttpHandler
+		targetHandler = DefaultEncapsulationHandler{
+			keyID:   keyID,
+			gateway: gateway,
+			appHandler: BinaryHTTPAppHandler{
+				httpHandler: httpHandler,
+			},
+		}
 	} else if requestLabel == "message/protohttp request" && responseLabel == "message/protohttp response" {
 		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
-		targetHandler = protobufHandler
+		targetHandler = DefaultEncapsulationHandler{
+			keyID:   keyID,
+			gateway: gateway,
+			appHandler: ProtoHTTPEncapsulationHandler{
+				httpHandler: httpHandler,
+			},
+		}
 	} else {
-		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
-		targetHandler = customHandler
+		panic("Unsupported application content handler")
 	}
 
-	handlers := make(map[string]ContentHandler)
+	// Create the echo handler chain
+	echoHandler := DefaultEncapsulationHandler{
+		keyID:      keyID,
+		gateway:    gateway,
+		appHandler: EchoAppHandler{},
+	}
+
+	// Create the metadata handler chain
+	metadataHandler := MetadataEncapsulationHandler{
+		keyID:   keyID,
+		gateway: gateway,
+	}
+
+	handlers := make(map[string]EncapsulationHandler)
 	handlers[gatewayEndpoint] = targetHandler    // Content-specific handler
 	handlers[echoEndpoint] = echoHandler         // Content-agnostic handler
 	handlers[metadataEndpoint] = metadataHandler // Metadata handler
 	target := &gatewayResource{
-		verbose:        true,
-		keyID:          keyID,
-		gateway:        gateway,
-		allowedOrigins: allowedOrigins,
-		handlers:       handlers,
+		verbose:               true,
+		keyID:                 keyID,
+		gateway:               gateway,
+		allowedOrigins:        allowedOrigins,
+		encapsulationHandlers: handlers,
 	}
 
 	endpoints := make(map[string]string)
 	endpoints["Target"] = gatewayEndpoint
 	endpoints["Health"] = healthEndpoint
 	endpoints["Config"] = configEndpoint
+	endpoints["Echo"] = echoEndpoint
+	endpoints["Metadata"] = metadataEndpoint
 
 	server := gatewayServer{
 		requestLabel:  requestLabel,
