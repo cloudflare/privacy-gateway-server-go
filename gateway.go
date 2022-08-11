@@ -67,7 +67,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 
 	encapsulatedRequest, err := s.parseEncapsulatedRequestFromContent(r)
 	if err != nil {
-		statusText := fmt.Errorf("parseEncapsulatedRequestFromContent failed: %s", err)
+		statusText := fmt.Sprintf("parseEncapsulatedRequestFromContent failed: %s", err.Error())
 		log.Println(statusText)
 		http.Error(w, statusText, http.StatusBadRequest)
 		return
@@ -81,7 +81,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 
 	binaryRequest, context, err := s.gateway.DecapsulateRequest(encapsulatedRequest)
 	if err != nil {
-		statusText := fmt.Errorf("DecapsulateRequest failed: %s", err)
+		statusText := fmt.Sprintf("DecapsulateRequest failed: %s", err.Error())
 		log.Println(statusText)
 		http.Error(w, statusText, http.StatusBadRequest)
 	return
@@ -104,7 +104,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
 		} else {
-			statusText := fmt.Errorf("Content handler failed: %s", err)
+			statusText := fmt.Sprintf("Content handler failed: %s", err.Error())
 			log.Println(statusText)
 			http.Error(w, statusText, http.StatusBadRequest)
 			return
@@ -113,7 +113,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 
 	encapsulatedResponse, err := context.EncapsulateResponse(binaryResponse)
 	if err != nil {
-		statusText := fmt.Errorf("EncapsulateResponse failed: %s", err)
+		statusText := fmt.Sprintf("EncapsulateResponse failed: %s", err.Error())
 		log.Println(statusText)
 		http.Error(w, statusText, http.StatusBadRequest)
 		return
