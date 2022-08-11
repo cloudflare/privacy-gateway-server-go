@@ -1,7 +1,7 @@
 # git.schwanenlied.me/yawning/x448.git v0.0.0-20170617130356-01b048fb03d6
 ## explicit
 git.schwanenlied.me/yawning/x448.git
-# github.com/chris-wood/ohttp-go v0.0.0-20220802165813-86ddbfbcd3a3
+# github.com/chris-wood/ohttp-go v0.0.0-20220810133439-e65868841109
 ## explicit; go 1.15
 github.com/chris-wood/ohttp-go
 # github.com/cisco/go-hpke v0.0.0-20220110164554-aec202176774

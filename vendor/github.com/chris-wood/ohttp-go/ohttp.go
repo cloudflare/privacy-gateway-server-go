@@ -186,7 +186,7 @@ func UnmarshalPublicConfig(data []byte) (PublicConfig, error) {
 }
 
 type EncapsulatedRequest struct {
-	keyID  uint8
+	KeyID  uint8
 	kemID  hpke.KEMID
 	kdfID  hpke.KDFID
 	aeadID hpke.AEADID
@@ -205,7 +205,7 @@ type EncapsulatedRequest struct {
 func (r EncapsulatedRequest) Marshal() []byte {
 	b := cryptobyte.NewBuilder(nil)
 
-	b.AddUint8(r.keyID)
+	b.AddUint8(r.KeyID)
 	b.AddUint16(uint16(r.kemID))
 	b.AddUint16(uint16(r.kdfID))
 	b.AddUint16(uint16(r.aeadID))
@@ -258,7 +258,7 @@ func UnmarshalEncapsulatedRequest(enc []byte) (EncapsulatedRequest, error) {
 	ct := b.Bytes()
 
 	return EncapsulatedRequest{
-		keyID:  uint8(keyID),
+		KeyID:  uint8(keyID),
 		kemID:  kemID,
 		kdfID:  kdfID,
 		aeadID: aeadID,
@@ -356,7 +356,7 @@ func (c Client) EncapsulateRequest(request []byte) (EncapsulatedRequest, Encapsu
 	ct := context.Seal(nil, request)
 
 	return EncapsulatedRequest{
-			keyID:  c.config.ID,
+			KeyID:  c.config.ID,
 			kdfID:  kdfID,
 			kemID:  kemID,
 			aeadID: aeadID,
@@ -428,6 +428,9 @@ func NewDefaultGateway(config PrivateConfig) Gateway {
 }
 
 func NewCustomGateway(config PrivateConfig, requestLabel, responseLabel string) Gateway {
+	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
+		panic("Invalid request and response labels")
+	}
 	return Gateway{
 		requestLabel:  []byte(requestLabel),
 		responseLabel: []byte(responseLabel),
@@ -444,8 +447,13 @@ type DecapsulateRequestContext struct {
 	context       *hpke.ReceiverContext
 }
 
+func (s Gateway) MatchesKnownKey(req EncapsulatedRequest) bool {
+	_, ok := s.keyMap[req.KeyID]
+	return ok
+}
+
 func (s Gateway) DecapsulateRequest(req EncapsulatedRequest) ([]byte, DecapsulateRequestContext, error) {
-	config, ok := s.keyMap[req.keyID]
+	config, ok := s.keyMap[req.KeyID]
 	if !ok {
 		return nil, DecapsulateRequestContext{}, fmt.Errorf("Unknown key ID")
 	}
@@ -457,7 +465,7 @@ func (s Gateway) DecapsulateRequest(req EncapsulatedRequest) ([]byte, Decapsulat
 
 	info := s.requestLabel
 	info = append(info, 0x00)
-	info = append(info, req.keyID)
+	info = append(info, req.KeyID)
 	buffer := make([]byte, 2)
 	binary.BigEndian.PutUint16(buffer, uint16(req.kemID))
 	info = append(info, buffer...)
