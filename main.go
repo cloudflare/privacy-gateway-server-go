@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/chris-wood/ohttp-go"
@@ -32,12 +33,13 @@ const (
 	configEndpoint   = "/ohttp-configs"
 
 	// Environment variables
-	secretSeedEnvironmentVariable  = "SEED_SECRET_KEY"
-	targetOriginAllowList          = "ALLOWED_TARGET_ORIGINS"
-	customRequestEncodingType      = "CUSTOM_REQUEST_TYPE"
-	customResponseEncodingType     = "CUSTOM_RESPONSE_TYPE"
-	certificateEnvironmentVariable = "CERT"
-	keyEnvironmentVariable         = "KEY"
+	secretSeedEnvironmentVariable   = "SEED_SECRET_KEY"
+	targetOriginAllowList           = "ALLOWED_TARGET_ORIGINS"
+	customRequestEncodingType       = "CUSTOM_REQUEST_TYPE"
+	customResponseEncodingType      = "CUSTOM_RESPONSE_TYPE"
+	certificateEnvironmentVariable  = "CERT"
+	keyEnvironmentVariable          = "KEY"
+	gatewayDebugEnvironmentVariable = "GATEWAY_DEBUG"
 )
 
 type gatewayServer struct {
@@ -154,6 +156,8 @@ func main() {
 		}
 	}
 
+	debugResponse := getBoolEnv(gatewayDebugEnvironmentVariable, false)
+
 	var certFile string
 	if certFile = os.Getenv(certificateEnvironmentVariable); certFile == "" {
 		certFile = "cert.pem"
@@ -199,6 +203,7 @@ func main() {
 		gateway:        gateway,
 		allowedOrigins: allowedOrigins,
 		handlers:       handlers,
+		debugResponse:  debugResponse,
 	}
 
 	endpoints := make(map[string]string)
@@ -227,5 +232,17 @@ func main() {
 		log.Printf("Listening on port %v without enabling TLS\n", port)
 		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", port), nil))
 	}
+}
 
+func getBoolEnv(key string, defaultVal bool) bool {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+
+	ret, err := strconv.ParseBool(val)
+	if err != nil {
+		return defaultVal
+	}
+	return ret
 }

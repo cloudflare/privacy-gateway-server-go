@@ -6,9 +6,11 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/chris-wood/ohttp-go"
@@ -19,6 +21,7 @@ var (
 	FIXED_KEY_ID     = uint8(0x00)
 	FORBIDDEN_TARGET = "forbidden.example"
 	ALLOWED_TARGET   = "allowed.example"
+	GATEWAY_DEBUG    = true
 )
 
 func createGateway(t *testing.T) ohttp.Gateway {
@@ -61,6 +64,7 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 		allowedOrigins: map[string]bool{
 			ALLOWED_TARGET: true,
 		},
+		debugResponse: GATEWAY_DEBUG,
 	}
 }
 
@@ -125,6 +129,17 @@ func TestQueryHandlerInvalidContentType(t *testing.T) {
 
 	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+	}
+
+	body, err := io.ReadAll(rr.Result().Body)
+	expectedDebugText := "Invalid content type: application/not-the-droids-youre-looking-for"
+	if err == nil {
+		if strings.Contains(string(body), expectedDebugText) {
+			print("Successfully returns text in response")
+		} else {
+			t.Fatal(fmt.Errorf("Failed to return expected text (%s) in response. Body text is: %s",
+				expectedDebugText, body))
+		}
 	}
 }
 

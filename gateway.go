@@ -24,6 +24,7 @@ type gatewayResource struct {
 	gateway        ohttp.Gateway
 	handlers       map[string]ContentHandler
 	allowedOrigins map[string]bool
+	debugResponse  bool
 }
 
 const (
@@ -53,46 +54,46 @@ func (s *gatewayResource) checkAllowList(targetOrigin string) bool {
 	return true
 }
 
+func (s *gatewayResource) httpError(w http.ResponseWriter, status int, debugMessage string) {
+	log.Println(debugMessage)
+	if s.debugResponse {
+		http.Error(w, debugMessage, status)
+	} else {
+		http.Error(w, http.StatusText(status), status)
+	}
+}
+
 func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request) {
 	if s.verbose {
 		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	}
 
 	if r.Header.Get("Content-Type") != ohttpRequestContentType {
-		statusText := fmt.Sprintf("Invalid content type: %s", r.Header.Get("Content-Type"))
-		log.Println(statusText)
-		http.Error(w, statusText, http.StatusBadRequest)
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Invalid content type: %s", r.Header.Get("Content-Type")))
 		return
 	}
 
 	encapsulatedRequest, err := s.parseEncapsulatedRequestFromContent(r)
 	if err != nil {
-		statusText := fmt.Sprintf("parseEncapsulatedRequestFromContent failed: %s", err.Error())
-		log.Println(statusText)
-		http.Error(w, statusText, http.StatusBadRequest)
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("parseEncapsulatedRequestFromContent failed: %s", err.Error()))
 		return
 	}
 
 	if encapsulatedRequest.KeyID != s.keyID {
-		log.Printf("Invalid request key")
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		s.httpError(w, http.StatusUnauthorized, "Invalid request key")
 		return
 	}
 
 	binaryRequest, context, err := s.gateway.DecapsulateRequest(encapsulatedRequest)
 	if err != nil {
-		statusText := fmt.Sprintf("DecapsulateRequest failed: %s", err.Error())
-		log.Println(statusText)
-		http.Error(w, statusText, http.StatusBadRequest)
-	return
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("DecapsulateRequest failed: %s", err.Error()))
+		return
 	}
 
 	var handler ContentHandler
 	var ok bool
 	if handler, ok = s.handlers[r.URL.Path]; !ok {
-		statusText := fmt.Sprintf("Unknown handler for %s", r.URL.Path)
-		log.Println(statusText)
-		http.Error(w, statusText, http.StatusBadRequest)
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Unknown handler for %s", r.URL.Path))
 		return
 	}
 
@@ -100,22 +101,17 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	binaryResponse, err := handler(r, binaryRequest, s.checkAllowList)
 	if err != nil {
 		if err == TargetForbiddenError {
-			log.Println("Target forbidden:", err)
-			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			s.httpError(w, http.StatusForbidden, fmt.Sprintf("Target forbidden: %s", err.Error()))
 			return
 		} else {
-			statusText := fmt.Sprintf("Content handler failed: %s", err.Error())
-			log.Println(statusText)
-			http.Error(w, statusText, http.StatusBadRequest)
+			s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Content handler failed: %s", err.Error()))
 			return
 		}
 	}
 
 	encapsulatedResponse, err := context.EncapsulateResponse(binaryResponse)
 	if err != nil {
-		statusText := fmt.Sprintf("EncapsulateResponse failed: %s", err.Error())
-		log.Println(statusText)
-		http.Error(w, statusText, http.StatusBadRequest)
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("EncapsulateResponse failed: %s", err.Error()))
 		return
 	}
 	packedResponse := encapsulatedResponse.Marshal()
@@ -133,8 +129,7 @@ func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) 
 
 	config, err := s.gateway.Config(s.keyID)
 	if err != nil {
-		log.Printf("Config unavailable")
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		s.httpError(w, http.StatusInternalServerError, "Config unavailable")
 		return
 	}
 
