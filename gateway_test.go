@@ -81,7 +81,7 @@ func createMockBhttpGatewayServer(t *testing.T) gatewayResource {
 }
 
 func createMockMetricsFactory(t *testing.T) MetricsFactory {
-	return CreateStatsDMetricsFactory("test", &statsd.NoOpClient{})
+	return CreateStatsDMetricsFactory("test", "metric", &statsd.NoOpClient{})
 }
 
 func TestConfigHandler(t *testing.T) {

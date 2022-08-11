@@ -268,7 +268,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create statsd client: %s", err)
 	}
-	metricsFactory := CreateStatsDMetricsFactory("ohttp_gateway", statsd_client)
+	defer statsd_client.Close()
+
+	metricsFactory := CreateStatsDMetricsFactory("ohttp_gateway", "ohttp_gateway_duration", statsd_client)
 
 	handlers := make(map[string]ContentHandler)
 	handlers[gatewayEndpoint] = metricsContentHandlerWrapper(metricsFactory, targetHandler)    // Content-specific handler
@@ -280,6 +282,7 @@ func main() {
 		gateway:        gateway,
 		allowedOrigins: allowedOrigins,
 		handlers:       handlers,
+		metricsFactory: metricsFactory,
 	}
 
 	endpoints := make(map[string]string)
