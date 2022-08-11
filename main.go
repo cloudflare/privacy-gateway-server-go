@@ -91,6 +91,7 @@ func metadataHandler(metricsFactory MetricsFactory, request *http.Request, reque
 		return nil, err
 	}
 
+	metrics.Fire("success")
 	return response, nil
 }
 
