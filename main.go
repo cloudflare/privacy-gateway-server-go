@@ -69,7 +69,7 @@ func echoHandler(request *http.Request, requestBody []byte, filter TargetFilter)
 }
 
 func metadataHandler(request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
-	return httputil.DumpRequest(request, true)
+	return httputil.DumpRequest(request, false)
 }
 
 func bhttpHandler(request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
