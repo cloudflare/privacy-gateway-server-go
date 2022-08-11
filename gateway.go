@@ -59,15 +59,17 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	if r.Header.Get("Content-Type") != ohttpRequestContentType {
-		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		statusText := fmt.Sprintf("Invalid content type: %s", r.Header.Get("Content-Type"))
+		log.Println(statusText)
+		http.Error(w, statusText, http.StatusBadRequest)
 		return
 	}
 
 	encapsulatedRequest, err := s.parseEncapsulatedRequestFromContent(r)
 	if err != nil {
-		log.Println("parseEncapsulatedRequestFromContent failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		statusText := fmt.Errorf("parseEncapsulatedRequestFromContent failed: %s", err)
+		log.Println(statusText)
+		http.Error(w, statusText, http.StatusBadRequest)
 		return
 	}
 
@@ -79,16 +81,18 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 
 	binaryRequest, context, err := s.gateway.DecapsulateRequest(encapsulatedRequest)
 	if err != nil {
-		log.Println("DecapsulateRequest failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
+		statusText := fmt.Errorf("DecapsulateRequest failed: %s", err)
+		log.Println(statusText)
+		http.Error(w, statusText, http.StatusBadRequest)
+	return
 	}
 
 	var handler ContentHandler
 	var ok bool
 	if handler, ok = s.handlers[r.URL.Path]; !ok {
-		log.Printf("Unknown handler for %s", r.URL.Path)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		statusText := fmt.Sprintf("Unknown handler for %s", r.URL.Path)
+		log.Println(statusText)
+		http.Error(w, statusText, http.StatusBadRequest)
 		return
 	}
 
@@ -100,16 +104,18 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 			return
 		} else {
-			log.Println("Content handler failed:", err)
-			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+			statusText := fmt.Errorf("Content handler failed: %s", err)
+			log.Println(statusText)
+			http.Error(w, statusText, http.StatusBadRequest)
 			return
 		}
 	}
 
 	encapsulatedResponse, err := context.EncapsulateResponse(binaryResponse)
 	if err != nil {
-		log.Println("EncapsulateResponse failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		statusText := fmt.Errorf("EncapsulateResponse failed: %s", err)
+		log.Println(statusText)
+		http.Error(w, statusText, http.StatusBadRequest)
 		return
 	}
 	packedResponse := encapsulatedResponse.Marshal()
