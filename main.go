@@ -77,12 +77,12 @@ func (s gatewayServer) healthCheckHandler(w http.ResponseWriter, r *http.Request
 	metrics.Fire("success")
 }
 
-func echoHandler(_ MetricsFactory, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
+func echoHandler(_ *gatewayResource, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
 	return requestBody, nil
 }
 
-func metadataHandler(metricsFactory MetricsFactory, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
-	metrics := metricsFactory("metadata_handler")
+func metadataHandler(gw *gatewayResource, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
+	metrics := gw.metricsFactory("metadata_handler")
 
 	response, err := httputil.DumpRequest(request, true)
 
@@ -95,8 +95,8 @@ func metadataHandler(metricsFactory MetricsFactory, request *http.Request, reque
 	return response, nil
 }
 
-func bhttpHandler(metricsCollectorFactory MetricsFactory, request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
-	metrics := metricsCollectorFactory("content_bhttp_handler")
+func bhttpHandler(gw *gatewayResource, request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+	metrics := gw.metricsFactory("content_bhttp_handler")
 
 	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
 	if err != nil {
@@ -129,8 +129,8 @@ func bhttpHandler(metricsCollectorFactory MetricsFactory, request *http.Request,
 	return response, nil
 }
 
-func protobufHandler(metricsFactory MetricsFactory, request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
-	metrics := metricsFactory("content_protobuf_handler")
+func protobufHandler(gw *gatewayResource, request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+	metrics := gw.metricsFactory("content_protobuf_handler")
 
 	req := &Request{}
 	if err := proto.Unmarshal(binaryRequest, req); err != nil {
@@ -173,14 +173,8 @@ func protobufHandler(metricsFactory MetricsFactory, request *http.Request, binar
 	return response, nil
 }
 
-func customHandler(_ MetricsFactory, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
+func customHandler(_ *gatewayResource, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
 	return nil, fmt.Errorf("Not implemented")
-}
-
-func metricsContentHandlerWrapper(metricsFactory MetricsFactory, handler ExtendedContentHandler) ContentHandler {
-	return func(request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
-		return handler(metricsFactory, request, requestBody, filter)
-	}
 }
 
 func getStatsDClient() (statsd.ClientInterface, error) {
@@ -249,7 +243,7 @@ func main() {
 	}
 
 	var gateway ohttp.Gateway
-	var targetHandler ExtendedContentHandler
+	var targetHandler ContentHandler
 	requestLabel := os.Getenv(customRequestEncodingType)
 	responseLabel := os.Getenv(customResponseEncodingType)
 	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
@@ -274,9 +268,9 @@ func main() {
 	metricsFactory := CreateStatsDMetricsFactory("ohttp_gateway", "ohttp_gateway_duration", statsd_client)
 
 	handlers := make(map[string]ContentHandler)
-	handlers[gatewayEndpoint] = metricsContentHandlerWrapper(metricsFactory, targetHandler)    // Content-specific handler
-	handlers[echoEndpoint] = metricsContentHandlerWrapper(metricsFactory, echoHandler)         // Content-agnostic handler
-	handlers[metadataEndpoint] = metricsContentHandlerWrapper(metricsFactory, metadataHandler) // Metadata handler
+	handlers[gatewayEndpoint] = targetHandler    // Content-specific handler
+	handlers[echoEndpoint] = echoHandler         // Content-agnostic handler
+	handlers[metadataEndpoint] = metadataHandler // Metadata handler
 	target := &gatewayResource{
 		verbose:        true,
 		keyID:          keyID,
