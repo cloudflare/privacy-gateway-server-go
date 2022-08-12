@@ -1,1 +1,7 @@
 *.pem
+
+.vscode 
+.idea
+
+gateway
+

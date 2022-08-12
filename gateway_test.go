@@ -6,13 +6,13 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"github.com/DataDog/datadog-go/v5/statsd"
+	"github.com/chris-wood/ohttp-go"
+	"github.com/cisco/go-hpke"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/chris-wood/ohttp-go"
-	"github.com/cisco/go-hpke"
 )
 
 var (
@@ -30,15 +30,15 @@ func createGateway(t *testing.T) ohttp.Gateway {
 	return ohttp.NewDefaultGateway(config)
 }
 
-func testEchoHandler(r *http.Request, request []byte, filter TargetFilter) ([]byte, error) {
+func testEchoHandler(r *http.Request, request []byte, filter TargetFilter, _ MetricsFactory) ([]byte, error) {
 	return request, nil
 }
 
-func testForbiddenEchoHandler(r *http.Request, request []byte, filter TargetFilter) ([]byte, error) {
+func testForbiddenEchoHandler(r *http.Request, request []byte, filter TargetFilter, _ MetricsFactory) ([]byte, error) {
 	return nil, TargetForbiddenError
 }
 
-func testBhttpHandler(r *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
+func testBhttpHandler(r *http.Request, binaryRequest []byte, filter TargetFilter, _ MetricsFactory) ([]byte, error) {
 	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
 	if err != nil {
 		return nil, err
@@ -61,6 +61,7 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 		allowedOrigins: map[string]bool{
 			ALLOWED_TARGET: true,
 		},
+		metricsFactory: createMockMetricsFactory(t),
 	}
 }
 
@@ -74,11 +75,32 @@ func createMockBhttpGatewayServer(t *testing.T) gatewayResource {
 		allowedOrigins: map[string]bool{
 			ALLOWED_TARGET: true,
 		},
+		metricsFactory: createMockMetricsFactory(t),
+	}
+}
+
+func createMockMetricsFactory(t *testing.T) MetricsFactory {
+	return CreateStatsDMetricsFactory("test", "metric", &statsd.NoOpClient{})
+}
+
+type MockMetrics struct {
+	expectedResult string
+	t              *testing.T
+}
+
+func (s *MockMetrics) Fire(result string) {
+	if result != s.expectedResult {
+		s.t.Fatal(fmt.Errorf("fire metrics with unexpected result expected: %s actual: %s", s.expectedResult, result))
 	}
 }
 
 func TestConfigHandler(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
+
+	target.metricsFactory = func(requestName string) Metrics {
+		return &MockMetrics{expectedResult: "success", t: t}
+	}
+
 	config, err := target.gateway.Config(FIXED_KEY_ID)
 	if err != nil {
 		t.Fatal(err)
@@ -112,6 +134,10 @@ func TestConfigHandler(t *testing.T) {
 func TestQueryHandlerInvalidContentType(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
 
+	target.metricsFactory = func(requestName string) Metrics {
+		return &MockMetrics{expectedResult: "invalid_content_type", t: t}
+	}
+
 	handler := http.HandlerFunc(target.gatewayHandler)
 
 	request, err := http.NewRequest("GET", gatewayEndpoint, nil)
@@ -130,6 +156,9 @@ func TestQueryHandlerInvalidContentType(t *testing.T) {
 
 func TestGatewayHandler(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
+	target.metricsFactory = func(requestName string) Metrics {
+		return &MockMetrics{expectedResult: "success", t: t}
+	}
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
@@ -162,6 +191,10 @@ func TestGatewayHandler(t *testing.T) {
 func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
 
+	target.metricsFactory = func(requestName string) Metrics {
+		return &MockMetrics{expectedResult: "invalid_encapsulated_request", t: t}
+	}
+
 	handler := http.HandlerFunc(target.gatewayHandler)
 
 	config, err := target.gateway.Config(FIXED_KEY_ID)
@@ -189,6 +222,10 @@ func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
 
 func TestGatewayHandlerWithInvalidKey(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
+
+	target.metricsFactory = func(requestName string) Metrics {
+		return &MockMetrics{expectedResult: "decapsulate_request_error", t: t}
+	}
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
@@ -219,6 +256,10 @@ func TestGatewayHandlerWithInvalidKey(t *testing.T) {
 func TestGatewayHandlerWithUnknownKey(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
 
+	target.metricsFactory = func(requestName string) Metrics {
+		return &MockMetrics{expectedResult: "decapsulate_request_invalid_key_error", t: t}
+	}
+
 	handler := http.HandlerFunc(target.gatewayHandler)
 
 	// Generate a new config that's different from the target's in the key ID
@@ -247,6 +288,10 @@ func TestGatewayHandlerWithUnknownKey(t *testing.T) {
 
 func TestGatewayHandlerWithCorruptContent(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
+
+	target.metricsFactory = func(requestName string) Metrics {
+		return &MockMetrics{expectedResult: "decapsulate_request_error", t: t}
+	}
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
@@ -279,6 +324,10 @@ func TestGatewayHandlerWithCorruptContent(t *testing.T) {
 func TestGatewayHandlerWithForbiddenTarget(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
 
+	target.metricsFactory = func(requestName string) Metrics {
+		return &MockMetrics{expectedResult: "forbidden_target", t: t}
+	}
+
 	handler := http.HandlerFunc(target.gatewayHandler)
 
 	config, err := target.gateway.Config(FIXED_KEY_ID)
@@ -307,6 +356,10 @@ func TestGatewayHandlerWithForbiddenTarget(t *testing.T) {
 
 func TestGatewayHandlerBHTTPRequestWithForbiddenTarget(t *testing.T) {
 	target := createMockBhttpGatewayServer(t)
+
+	target.metricsFactory = func(requestName string) Metrics {
+		return &MockMetrics{expectedResult: "forbidden_target", t: t}
+	}
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
@@ -345,6 +398,10 @@ func TestGatewayHandlerBHTTPRequestWithForbiddenTarget(t *testing.T) {
 
 func TestGatewayHandlerBHTTPRequestWithAllowedTarget(t *testing.T) {
 	target := createMockBhttpGatewayServer(t)
+
+	target.metricsFactory = func(requestName string) Metrics {
+		return &MockMetrics{expectedResult: "success", t: t}
+	}
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
