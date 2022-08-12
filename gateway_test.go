@@ -9,6 +9,8 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/chris-wood/ohttp-go"
@@ -106,6 +108,23 @@ func TestConfigHandler(t *testing.T) {
 
 	if !bytes.Equal(body, marshalledConfig) {
 		t.Fatal("Received invalid config")
+	}
+
+	// checking correct header exists
+	// Cache-Control: max-age=%d, private
+	cctrl := rr.Header().Get("Cache-Control")
+
+	if strings.HasPrefix(cctrl, "max-age=") && strings.HasSuffix(cctrl, ", private") {
+		maxAge := strings.TrimPrefix(strings.TrimSuffix(cctrl, ", private"), "max-age=")
+		age, err := strconv.Atoi(maxAge)
+		if err != nil {
+			t.Fatal("max-age value should be int", err)
+		}
+		if age < twelveHours || age > twelveHours+twentyFourHours {
+			t.Fatal("age should be between 12 and 36 hours")
+		}
+	} else {
+		t.Fatal("Cache-Control format should be 'max-age=86400, private'")
 	}
 }
 
