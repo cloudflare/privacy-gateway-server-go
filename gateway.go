@@ -31,6 +31,8 @@ type gatewayResource struct {
 const (
 	ohttpRequestContentType  = "message/ohttp-req"
 	ohttpResponseContentType = "message/ohttp-res"
+	twelveHours              = 12 * 3600
+	twentyFourHours          = 24 * 3600
 )
 
 func (s *gatewayResource) parseEncapsulatedRequestFromContent(r *http.Request) (ohttp.EncapsulatedRequest, error) {
@@ -136,7 +138,7 @@ func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) 
 
 	// Make expiration time even/random throughout interval 12-36h
 	rand.Seed(time.Now().UnixNano())
-	maxAge := 12*3600 + rand.Intn(24*3600)
+	maxAge := twelveHours + rand.Intn(twentyFourHours)
 	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d, private", maxAge))
 
 	w.Write(config.Marshal())

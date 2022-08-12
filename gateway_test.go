@@ -120,7 +120,7 @@ func TestConfigHandler(t *testing.T) {
 		if err != nil {
 			t.Fatal("max-age value should be int", err)
 		}
-		if age < 12*3600 || age > 36*3600 {
+		if age < twelveHours || age > twelveHours+twentyFourHours {
 			t.Fatal("age should be between 12 and 36 hours")
 		}
 	} else {
