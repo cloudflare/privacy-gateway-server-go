@@ -84,7 +84,7 @@ func echoHandler(request *http.Request, requestBody []byte, filter TargetFilter,
 func metadataHandler(request *http.Request, requestBody []byte, filter TargetFilter, metricsFactory MetricsFactory) ([]byte, error) {
 	metrics := metricsFactory("metadata_handler")
 
-	response, err := httputil.DumpRequest(request, true)
+	response, err := httputil.DumpRequest(request, false)
 
 	if err != nil {
 		metrics.Fire("metadata_dump_request_error")
