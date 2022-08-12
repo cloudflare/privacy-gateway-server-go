@@ -65,10 +65,7 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 	encapHandlers[echoEndpoint] = echoEncapHandler
 	encapHandlers[gatewayEndpoint] = mockProtoHTTPFilterHandler
 	return gatewayResource{
-		gateway: gateway,
-		allowedOrigins: map[string]bool{
-			ALLOWED_TARGET: true,
-		},
+		gateway:               gateway,
 		encapsulationHandlers: encapHandlers,
 	}
 }

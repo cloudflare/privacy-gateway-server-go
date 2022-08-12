@@ -166,7 +166,6 @@ func main() {
 		verbose:               true,
 		keyID:                 keyID,
 		gateway:               gateway,
-		allowedOrigins:        allowedOrigins,
 		encapsulationHandlers: handlers,
 	}
 

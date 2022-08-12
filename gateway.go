@@ -12,11 +12,9 @@ import (
 )
 
 type gatewayResource struct {
-	verbose        bool
-	keyID          uint8
-	gateway        ohttp.Gateway
-	allowedOrigins map[string]bool
-
+	verbose               bool
+	keyID                 uint8
+	gateway               ohttp.Gateway
 	encapsulationHandlers map[string]EncapsulationHandler
 }
 
