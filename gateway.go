@@ -5,6 +5,7 @@ package main
 
 import (
 	"io/ioutil"
+	"fmt"
 	"log"
 	"math/rand"
 	"net/http"
