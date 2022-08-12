@@ -4,8 +4,6 @@
 package main
 
 import (
-	"errors"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -15,17 +13,11 @@ import (
 	"github.com/chris-wood/ohttp-go"
 )
 
-type TargetFilter func(targetOrigin string) bool
-type ContentHandler func(request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error)
-
-var TargetForbiddenError = errors.New("Target forbidden")
-
 type gatewayResource struct {
-	verbose        bool
-	keyID          uint8
-	gateway        ohttp.Gateway
-	handlers       map[string]ContentHandler
-	allowedOrigins map[string]bool
+	verbose               bool
+	keyID                 uint8
+	gateway               ohttp.Gateway
+	encapsulationHandlers map[string]EncapsulationHandler
 }
 
 const (
@@ -36,10 +28,6 @@ const (
 )
 
 func (s *gatewayResource) parseEncapsulatedRequestFromContent(r *http.Request) (ohttp.EncapsulatedRequest, error) {
-	if r.Method != http.MethodPost {
-		return ohttp.EncapsulatedRequest{}, fmt.Errorf("Unsupported HTTP method for Oblivious DNS query: %s", r.Method)
-	}
-
 	defer r.Body.Close()
 	encryptedMessageBytes, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -49,77 +37,54 @@ func (s *gatewayResource) parseEncapsulatedRequestFromContent(r *http.Request) (
 	return ohttp.UnmarshalEncapsulatedRequest(encryptedMessageBytes)
 }
 
-func (s *gatewayResource) checkAllowList(targetOrigin string) bool {
-	if s.allowedOrigins != nil {
-		_, ok := s.allowedOrigins[targetOrigin]
-		return ok // Allow if the origin is in the allowed list
-	}
-	return true
-}
-
 func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request) {
 	if s.verbose {
 		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	}
-
+	if r.Method != http.MethodPost {
+		log.Printf("Unsupported HTTP method: %s", r.Method)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
 	if r.Header.Get("Content-Type") != ohttpRequestContentType {
 		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
-	encapsulatedRequest, err := s.parseEncapsulatedRequestFromContent(r)
+	var encapHandler EncapsulationHandler
+	var ok bool
+	if encapHandler, ok = s.encapsulationHandlers[r.URL.Path]; !ok {
+		log.Printf("Unknown handler for %s", r.URL.Path)
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+
+	encapsulatedReq, err := s.parseEncapsulatedRequestFromContent(r)
 	if err != nil {
 		log.Println("parseEncapsulatedRequestFromContent failed:", err)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
 
-	if encapsulatedRequest.KeyID != s.keyID {
-		log.Printf("Invalid request key")
-		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		return
-	}
-
-	binaryRequest, context, err := s.gateway.DecapsulateRequest(encapsulatedRequest)
+	encapsulatedResp, err := encapHandler.Handle(r, encapsulatedReq)
 	if err != nil {
-		log.Println("DecapsulateRequest failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-
-	var handler ContentHandler
-	var ok bool
-	if handler, ok = s.handlers[r.URL.Path]; !ok {
-		log.Printf("Unknown handler for %s", r.URL.Path)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-
-	// Dispatch to the content handler bound to the URL path
-	binaryResponse, err := handler(r, binaryRequest, s.checkAllowList)
-	if err != nil {
-		if err == TargetForbiddenError {
-			log.Println("Target forbidden:", err)
-			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+		if s.verbose {
+			log.Println(err)
+		}
+		if err == ConfigMismatchError {
+			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
 		} else {
-			log.Println("Content handler failed:", err)
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return
 		}
 	}
 
-	encapsulatedResponse, err := context.EncapsulateResponse(binaryResponse)
-	if err != nil {
-		log.Println("EncapsulateResponse failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-	packedResponse := encapsulatedResponse.Marshal()
+	packedResponse := encapsulatedResp.Marshal()
 
 	if s.verbose {
-		log.Printf("Target response: %x", packedResponse)
+		log.Printf("Gateway response: %x", packedResponse)
 	}
 
 	w.Header().Set("Content-Type", ohttpResponseContentType)

@@ -7,8 +7,10 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 var requestMethodMap = map[Request_Method]string{
@@ -25,6 +27,50 @@ var requestMethodMap = map[Request_Method]string{
 var requestSchemeMap = map[Request_Scheme]string{
 	Request_HTTP:  "http",
 	Request_HTTPS: "https",
+}
+
+func requestToProtoHTTP(request *http.Request) (*Request, error) {
+	req := &Request{}
+
+	switch request.Method {
+	case http.MethodGet:
+		req.Method = Request_GET
+	case http.MethodHead:
+		req.Method = Request_HEAD
+	case http.MethodPost:
+		req.Method = Request_POST
+	case http.MethodOptions:
+		req.Method = Request_OPTIONS
+	case http.MethodPut:
+		req.Method = Request_PUT
+	case http.MethodDelete:
+		req.Method = Request_DELETE
+	default:
+		break
+	}
+
+	if request.URL.Scheme == "http" || request.URL.Scheme == "HTTP" {
+		req.Scheme = Request_HTTP
+	} else {
+		req.Scheme = Request_HTTPS
+	}
+
+	req.Authority = request.Host
+
+	req.Headers = make(map[string]string)
+	for name, value := range request.Header {
+		req.Headers[name] = strings.Join(value, " ")
+	}
+	if request.Body != nil {
+		body, err := ioutil.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		req.Body = body
+	}
+
+	return req, nil
 }
 
 func protoHTTPToRequest(request *Request) (*http.Request, error) {
@@ -62,10 +108,14 @@ func protoHTTPToRequest(request *Request) (*http.Request, error) {
 }
 
 func responseToProtoHTTP(targetResponse *http.Response) (*Response, error) {
-	defer targetResponse.Body.Close()
-	responseContent, err := io.ReadAll(targetResponse.Body)
-	if err != nil {
-		return nil, err
+	var responseContent []byte
+	var err error
+	if targetResponse.Body != nil {
+		defer targetResponse.Body.Close()
+		responseContent, err = io.ReadAll(targetResponse.Body)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	responseHeaders := make(map[string]string)
