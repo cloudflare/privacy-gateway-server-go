@@ -77,12 +77,12 @@ func (s gatewayServer) healthCheckHandler(w http.ResponseWriter, r *http.Request
 	metrics.Fire("success")
 }
 
-func echoHandler(_ *gatewayResource, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
+func echoHandler(request *http.Request, requestBody []byte, filter TargetFilter, _ MetricsFactory) ([]byte, error) {
 	return requestBody, nil
 }
 
-func metadataHandler(gw *gatewayResource, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
-	metrics := gw.metricsFactory("metadata_handler")
+func metadataHandler(request *http.Request, requestBody []byte, filter TargetFilter, metricsFactory MetricsFactory) ([]byte, error) {
+	metrics := metricsFactory("metadata_handler")
 
 	response, err := httputil.DumpRequest(request, true)
 
@@ -95,8 +95,8 @@ func metadataHandler(gw *gatewayResource, request *http.Request, requestBody []b
 	return response, nil
 }
 
-func bhttpHandler(gw *gatewayResource, request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
-	metrics := gw.metricsFactory("content_bhttp_handler")
+func bhttpHandler(request *http.Request, binaryRequest []byte, filter TargetFilter, metricsFactory MetricsFactory) ([]byte, error) {
+	metrics := metricsFactory("content_bhttp_handler")
 
 	request, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
 	if err != nil {
@@ -129,8 +129,8 @@ func bhttpHandler(gw *gatewayResource, request *http.Request, binaryRequest []by
 	return response, nil
 }
 
-func protobufHandler(gw *gatewayResource, request *http.Request, binaryRequest []byte, filter TargetFilter) ([]byte, error) {
-	metrics := gw.metricsFactory("content_protobuf_handler")
+func protobufHandler(request *http.Request, binaryRequest []byte, filter TargetFilter, metricsFactory MetricsFactory) ([]byte, error) {
+	metrics := metricsFactory("content_protobuf_handler")
 
 	req := &Request{}
 	if err := proto.Unmarshal(binaryRequest, req); err != nil {
@@ -173,7 +173,7 @@ func protobufHandler(gw *gatewayResource, request *http.Request, binaryRequest [
 	return response, nil
 }
 
-func customHandler(_ *gatewayResource, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error) {
+func customHandler(request *http.Request, requestBody []byte, filter TargetFilter, _ MetricsFactory) ([]byte, error) {
 	return nil, fmt.Errorf("Not implemented")
 }
 

@@ -14,7 +14,7 @@ import (
 )
 
 type TargetFilter func(targetOrigin string) bool
-type ContentHandler func(gw *gatewayResource, request *http.Request, requestBody []byte, filter TargetFilter) ([]byte, error)
+type ContentHandler func(request *http.Request, requestBody []byte, filter TargetFilter, metricsFactory MetricsFactory) ([]byte, error)
 
 var TargetForbiddenError = errors.New("Target forbidden")
 
@@ -101,7 +101,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Dispatch to the content handler bound to the URL path
-	binaryResponse, err := handler(s, r, binaryRequest, s.checkAllowList)
+	binaryResponse, err := handler(r, binaryRequest, s.checkAllowList, s.metricsFactory)
 	if err != nil {
 		if err == TargetForbiddenError {
 			log.Println("Target forbidden:", err)
