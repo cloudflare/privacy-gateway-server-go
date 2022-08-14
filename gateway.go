@@ -4,8 +4,8 @@
 package main
 
 import (
-	"io/ioutil"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
@@ -19,6 +19,7 @@ type gatewayResource struct {
 	keyID                 uint8
 	gateway               ohttp.Gateway
 	encapsulationHandlers map[string]EncapsulationHandler
+	debugResponse         bool
 }
 
 const (
@@ -27,6 +28,15 @@ const (
 	twelveHours              = 12 * 3600
 	twentyFourHours          = 24 * 3600
 )
+
+func (s *gatewayResource) httpError(w http.ResponseWriter, status int, debugMessage string) {
+	log.Println(debugMessage)
+	if s.debugResponse {
+		http.Error(w, debugMessage, status)
+	} else {
+		http.Error(w, http.StatusText(status), status)
+	}
+}
 
 func (s *gatewayResource) parseEncapsulatedRequestFromContent(r *http.Request) (ohttp.EncapsulatedRequest, error) {
 	defer r.Body.Close()
@@ -43,28 +53,24 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	}
 	if r.Method != http.MethodPost {
-		log.Printf("Unsupported HTTP method: %s", r.Method)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Invalid method: %s", r.Method))
 		return
 	}
 	if r.Header.Get("Content-Type") != ohttpRequestContentType {
-		log.Printf("Invalid content type: %s", r.Header.Get("Content-Type"))
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Invalid content type: %s", r.Header.Get("Content-Type")))
 		return
 	}
 
 	var encapHandler EncapsulationHandler
 	var ok bool
 	if encapHandler, ok = s.encapsulationHandlers[r.URL.Path]; !ok {
-		log.Printf("Unknown handler for %s", r.URL.Path)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Unknown handler"))
 		return
 	}
 
 	encapsulatedReq, err := s.parseEncapsulatedRequestFromContent(r)
 	if err != nil {
-		log.Println("parseEncapsulatedRequestFromContent failed:", err)
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed"))
 		return
 	}
 
@@ -83,10 +89,6 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	packedResponse := encapsulatedResp.Marshal()
-
-	if s.verbose {
-		log.Printf("Gateway response: %x", packedResponse)
-	}
 
 	w.Header().Set("Content-Type", ohttpResponseContentType)
 	w.Write(packedResponse)
