@@ -44,10 +44,11 @@ const (
 )
 
 type gatewayServer struct {
-	requestLabel  string
-	responseLabel string
-	endpoints     map[string]string
-	target        *gatewayResource
+	requestLabel   string
+	responseLabel  string
+	endpoints      map[string]string
+	target         *gatewayResource
+	metricsFactory MetricsFactory
 }
 
 func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
@@ -178,6 +179,26 @@ func main() {
 		gateway: gateway,
 	}
 
+	// Configure metrics
+	metricsHost := os.Getenv(statsdHostVariable)
+	metricsPort := os.Getenv(statsdPortVariable)
+	metricsTimeout, err := strconv.ParseInt(os.Getenv(statsdTimeoutVariable), 10, 64)
+	if err != nil {
+		log.Fatalf("Failed parsing metrics timeout: %s", err)
+		metricsTimeout = 100
+	}
+	client, err := createStatsDClient(metricsHost, metricsPort, int(metricsTimeout))
+	if err != nil {
+		log.Fatalf("Failed to create statsd client: %s", err)
+	}
+	defer client.Close()
+
+	metricsFactory := &StatsDMetricsFactory{
+		serviceName: "ohttp_gateway",
+		metricsName: "ohttp_gateway_duration",
+		client:      client,
+	}
+
 	handlers := make(map[string]EncapsulationHandler)
 	handlers[gatewayEndpoint] = targetHandler    // Content-specific handler
 	handlers[echoEndpoint] = echoHandler         // Content-agnostic handler
@@ -188,6 +209,7 @@ func main() {
 		gateway:               gateway,
 		encapsulationHandlers: handlers,
 		debugResponse:         debugResponse,
+		metricsFactory:        metricsFactory,
 	}
 
 	endpoints := make(map[string]string)

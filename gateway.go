@@ -20,6 +20,7 @@ type gatewayResource struct {
 	gateway               ohttp.Gateway
 	encapsulationHandlers map[string]EncapsulationHandler
 	debugResponse         bool
+	metricsFactory        MetricsFactory
 }
 
 const (
@@ -27,10 +28,18 @@ const (
 	ohttpResponseContentType = "message/ohttp-res"
 	twelveHours              = 12 * 3600
 	twentyFourHours          = 24 * 3600
+
+	// Metrics constants
+	metricsEventGatewayRequest      = "gateway_request"
+	metricsResultInvalidMethod      = "invalid_method"
+	metricsResultInvalidContentType = "invalid_method"
+	metricsResultInvalidContent     = "invalid_content"
 )
 
 func (s *gatewayResource) httpError(w http.ResponseWriter, status int, debugMessage string) {
-	log.Println(debugMessage)
+	if s.verbose {
+		log.Println(debugMessage)
+	}
 	if s.debugResponse {
 		http.Error(w, debugMessage, status)
 	} else {
@@ -52,11 +61,19 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	if s.verbose {
 		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	}
+
+	metrics := s.metricsFactory.Create(metricsEventGatewayRequest)
+	metrics = s.metricsFactory.Create(metricsEventGatewayRequest)
+	metrics = s.metricsFactory.Create(metricsEventGatewayRequest)
+	metrics = s.metricsFactory.Create(metricsEventGatewayRequest)
+
 	if r.Method != http.MethodPost {
+		metrics.Fire(metricsResultInvalidMethod)
 		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Invalid method: %s", r.Method))
 		return
 	}
 	if r.Header.Get("Content-Type") != ohttpRequestContentType {
+		metrics.Fire(metricsResultInvalidContentType)
 		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Invalid content type: %s", r.Header.Get("Content-Type")))
 		return
 	}
@@ -70,11 +87,12 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 
 	encapsulatedReq, err := s.parseEncapsulatedRequestFromContent(r)
 	if err != nil {
+		metrics.Fire(metricsResultInvalidContent)
 		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed"))
 		return
 	}
 
-	encapsulatedResp, err := encapHandler.Handle(r, encapsulatedReq)
+	encapsulatedResp, err := encapHandler.Handle(r, encapsulatedReq, metrics)
 	if err != nil {
 		if s.verbose {
 			log.Println(err)
@@ -95,7 +113,9 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
+	if s.verbose {
+		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
+	}
 
 	config, err := s.gateway.Config(s.keyID)
 	if err != nil {
