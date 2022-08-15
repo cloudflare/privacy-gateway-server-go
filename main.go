@@ -184,7 +184,7 @@ func main() {
 	metricsPort := os.Getenv(statsdPortVariable)
 	metricsTimeout, err := strconv.ParseInt(os.Getenv(statsdTimeoutVariable), 10, 64)
 	if err != nil {
-		log.Fatalf("Failed parsing metrics timeout: %s", err)
+		log.Printf("Failed parsing metrics timeout: %s", err)
 		metricsTimeout = 100
 	}
 	client, err := createStatsDClient(metricsHost, metricsPort, int(metricsTimeout))

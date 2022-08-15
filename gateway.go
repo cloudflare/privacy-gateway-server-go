@@ -63,9 +63,6 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	metrics := s.metricsFactory.Create(metricsEventGatewayRequest)
-	metrics = s.metricsFactory.Create(metricsEventGatewayRequest)
-	metrics = s.metricsFactory.Create(metricsEventGatewayRequest)
-	metrics = s.metricsFactory.Create(metricsEventGatewayRequest)
 
 	if r.Method != http.MethodPost {
 		metrics.Fire(metricsResultInvalidMethod)
