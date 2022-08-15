@@ -35,11 +35,39 @@ func createGateway(t *testing.T) ohttp.Gateway {
 	return ohttp.NewDefaultGateway(config)
 }
 
+type MockMetrics struct {
+	collector *MockMetricsFactory
+}
+
+func (s *MockMetrics) Fire(result string) {
+	s.collector.result = result
+}
+
+type MockMetricsFactory struct {
+	eventName string
+	result    string
+}
+
+func (f *MockMetricsFactory) Create(eventName string) Metrics {
+	metrics := &MockMetrics{
+		collector: f,
+	}
+	return metrics
+}
+
 type ForbiddenCheckHttpRequestHandler struct {
 	forbidden string
 }
 
-func (h ForbiddenCheckHttpRequestHandler) Handle(req *http.Request) (*http.Response, error) {
+func mustGetMetricsFactory(t *testing.T, gateway gatewayResource) *MockMetricsFactory {
+	factory, ok := gateway.metricsFactory.(*MockMetricsFactory)
+	if !ok {
+		panic("Failed to get metrics factory")
+	}
+	return factory
+}
+
+func (h ForbiddenCheckHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (*http.Response, error) {
 	if req.Host == h.forbidden {
 		return nil, TargetForbiddenError
 	}
@@ -72,6 +100,7 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 		gateway:               gateway,
 		encapsulationHandlers: encapHandlers,
 		debugResponse:         GATEWAY_DEBUG,
+		metricsFactory:        &MockMetricsFactory{},
 	}
 }
 
@@ -134,6 +163,16 @@ func testBodyContainsError(t *testing.T, resp *http.Response, expectedText strin
 	}
 }
 
+func testMetricsContainsResult(t *testing.T, metricsCollector *MockMetricsFactory, event string, result string) {
+	if metricsCollector.eventName == event {
+		if metricsCollector.result != result {
+			t.Fatalf("Expeted event %s to have result %s, got %s", event, result, metricsCollector.result)
+		} else {
+			t.Fatal("foobar")
+		}
+	}
+}
+
 func TestQueryHandlerInvalidContentType(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
 
@@ -153,6 +192,7 @@ func TestQueryHandlerInvalidContentType(t *testing.T) {
 	}
 
 	testBodyContainsError(t, rr.Result(), "Invalid content type: application/not-the-droids-youre-looking-for")
+	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultInvalidContentType)
 }
 
 func TestGatewayHandler(t *testing.T) {
@@ -184,6 +224,8 @@ func TestGatewayHandler(t *testing.T) {
 	if rr.Result().Header.Get("Content-Type") != "message/ohttp-res" {
 		t.Fatal("Invalid content type response")
 	}
+
+	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultSuccess)
 }
 
 func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
@@ -212,6 +254,8 @@ func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
 	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
 	}
+
+	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultInvalidMethod)
 }
 
 func TestGatewayHandlerWithInvalidKey(t *testing.T) {
@@ -241,6 +285,8 @@ func TestGatewayHandlerWithInvalidKey(t *testing.T) {
 	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
 	}
+
+	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultDecapsulationFailed)
 }
 
 func TestGatewayHandlerWithUnknownKey(t *testing.T) {
@@ -270,6 +316,8 @@ func TestGatewayHandlerWithUnknownKey(t *testing.T) {
 	if status := rr.Result().StatusCode; status != http.StatusUnauthorized {
 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusUnauthorized, status))
 	}
+
+	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultConfigurationMismatch)
 }
 
 func TestGatewayHandlerWithCorruptContent(t *testing.T) {
@@ -301,6 +349,8 @@ func TestGatewayHandlerWithCorruptContent(t *testing.T) {
 	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
 	}
+
+	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultDecapsulationFailed)
 }
 
 func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
@@ -367,6 +417,8 @@ func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusForbidden, resp.StatusCode))
 	}
+
+	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultTargetRequestForbidden)
 }
 
 func TestGatewayHandlerProtoHTTPRequestWithAllowedTarget(t *testing.T) {
@@ -437,4 +489,6 @@ func TestGatewayHandlerProtoHTTPRequestWithAllowedTarget(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusOK, resp.StatusCode))
 	}
+
+	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultSuccess)
 }
