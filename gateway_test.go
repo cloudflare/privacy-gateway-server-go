@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,7 @@ var (
 	FIXED_KEY_ID     = uint8(0x00)
 	FORBIDDEN_TARGET = "forbidden.example"
 	ALLOWED_TARGET   = "allowed.example"
+	GATEWAY_DEBUG    = true
 )
 
 func createGateway(t *testing.T) ohttp.Gateway {
@@ -69,6 +71,7 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 	return gatewayResource{
 		gateway:               gateway,
 		encapsulationHandlers: encapHandlers,
+		debugResponse:         GATEWAY_DEBUG,
 	}
 }
 
@@ -121,6 +124,16 @@ func TestConfigHandler(t *testing.T) {
 	}
 }
 
+func testBodyContainsError(t *testing.T, resp *http.Response, expectedText string) {
+	body, err := io.ReadAll(resp.Body)
+	if err == nil {
+		if !strings.Contains(string(body), expectedText) {
+			t.Fatal(fmt.Errorf("Failed to return expected text (%s) in response. Body text is: %s",
+				expectedText, body))
+		}
+	}
+}
+
 func TestQueryHandlerInvalidContentType(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
 
@@ -138,6 +151,8 @@ func TestQueryHandlerInvalidContentType(t *testing.T) {
 	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
 	}
+
+	testBodyContainsError(t, rr.Result(), "Invalid content type: application/not-the-droids-youre-looking-for")
 }
 
 func TestGatewayHandler(t *testing.T) {
