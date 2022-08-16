@@ -32,7 +32,7 @@ const (
 	// Metrics constants
 	metricsEventGatewayRequest      = "gateway_request"
 	metricsResultInvalidMethod      = "invalid_method"
-	metricsResultInvalidContentType = "invalid_method"
+	metricsResultInvalidContentType = "invalid_content_type"
 	metricsResultInvalidContent     = "invalid_content"
 )
 
