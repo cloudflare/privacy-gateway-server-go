@@ -4,7 +4,10 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
+	"github.com/golang/protobuf/proto"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -30,6 +33,7 @@ const (
 	twentyFourHours          = 24 * 3600
 
 	// Metrics constants
+	metricsEventMarshalRequest      = "marshal_request"
 	metricsEventGatewayRequest      = "gateway_request"
 	metricsResultInvalidMethod      = "invalid_method"
 	metricsResultInvalidContentType = "invalid_content_type"
@@ -107,6 +111,58 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", ohttpResponseContentType)
 	w.Write(packedResponse)
+}
+
+func (s *gatewayResource) marshalHandler(w http.ResponseWriter, r *http.Request) {
+	if s.verbose {
+		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
+	}
+
+	metrics := s.metricsFactory.Create(metricsEventMarshalRequest)
+	metrics.Fire(metricsResultRequested)
+
+	if r.Method != http.MethodPost {
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Invalid method: %s", r.Method))
+		return
+	}
+
+	defer r.Body.Close()
+	bodyBytes, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		s.httpError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	var parsedReq, er = http.ReadRequest(bufio.NewReader(bytes.NewReader(bodyBytes)))
+	if er != nil {
+		s.httpError(w, http.StatusBadRequest, "Reading request body failed")
+		return
+	}
+
+	protoRequest, err := requestToProtoHTTP(parsedReq)
+	if err != nil {
+		s.httpError(w, http.StatusInternalServerError, "Protobuf marshalling failed")
+		return
+	}
+	protoMarshalled, err := proto.Marshal(protoRequest)
+
+	config, err := s.gateway.Config(s.keyID)
+	if err != nil {
+		log.Printf("Config unavailable")
+		s.httpError(w, http.StatusInternalServerError, "Config unavailable")
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
+	// todo: get labels there instead of hardcode
+	ohttpClient := ohttp.NewCustomClient(config, "message/protohttp request", "message/protohttp response")
+	encapsulated, _, err := ohttpClient.EncapsulateRequest(protoMarshalled)
+
+	packedRequest := encapsulated.Marshal()
+
+	w.Header().Set("Content-Type", ohttpResponseContentType)
+	w.Write(packedRequest)
+
+	metrics.Fire(metricsResultSuccess)
 }
 
 func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) {

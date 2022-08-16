@@ -31,6 +31,7 @@ const (
 	metricsResultResponseTranslationFailed = "response_translate_failed"
 	metricsResultTargetRequestForbidden    = "request_forbidden"
 	metricsResultTargetRequestFailed       = "request_failed"
+	metricsResultRequested                 = "requested"
 	metricsResultSuccess                   = "success"
 )
 

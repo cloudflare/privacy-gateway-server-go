@@ -27,6 +27,7 @@ const (
 	gatewayEndpoint  = "/gateway"
 	echoEndpoint     = "/gateway-echo"
 	metadataEndpoint = "/gateway-metadata"
+	marshalEndpoint  = "/gateway-marshal"
 	healthEndpoint   = "/health"
 	configEndpoint   = "/ohttp-configs"
 
@@ -61,6 +62,7 @@ func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "   Response content type: %s\n", s.responseLabel)
 	fmt.Fprintf(w, "Echo endpoint: https://%s%s\n", r.Host, s.endpoints["Echo"])
 	fmt.Fprintf(w, "Metadata endpoint: https://%s%s\n", r.Host, s.endpoints["Metadata"])
+	fmt.Fprintf(w, "Marshal endpoint: https://%s%s\n", r.Host, s.endpoints["Marshal"])
 	fmt.Fprint(w, "----------------\n")
 }
 
@@ -218,6 +220,7 @@ func main() {
 	endpoints["Config"] = configEndpoint
 	endpoints["Echo"] = echoEndpoint
 	endpoints["Metadata"] = metadataEndpoint
+	endpoints["Marshal"] = marshalEndpoint
 
 	server := gatewayServer{
 		requestLabel:  requestLabel,
@@ -229,6 +232,7 @@ func main() {
 	http.HandleFunc(gatewayEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(echoEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(metadataEndpoint, server.target.gatewayHandler)
+	http.HandleFunc(marshalEndpoint, server.target.marshalHandler)
 	http.HandleFunc(healthEndpoint, server.healthCheckHandler)
 	http.HandleFunc(configEndpoint, target.configHandler)
 	http.HandleFunc("/", server.indexHandler)
