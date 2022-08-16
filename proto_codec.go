@@ -10,7 +10,6 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	"strings"
 )
 
 var requestMethodMap = map[Request_Method]string{
@@ -57,9 +56,14 @@ func requestToProtoHTTP(request *http.Request) (*Request, error) {
 
 	req.Authority = request.Host
 
-	req.Headers = make(map[string]string)
+	req.Headers = []*HeaderNameValue{}
 	for name, value := range request.Header {
-		req.Headers[name] = strings.Join(value, " ")
+		for _, val := range value {
+			var nv = new(HeaderNameValue)
+			nv.Name = name
+			nv.Value = val
+			req.Headers = append(req.Headers, nv)
+		}
 	}
 	if request.Body != nil {
 		body, err := ioutil.ReadAll(request.Body)
@@ -86,9 +90,10 @@ func protoHTTPToRequest(request *Request) (*http.Request, error) {
 
 	authority := request.Authority
 	if authority == "" {
-		authority = request.Headers["Host"]
-		if authority == "" {
-			authority = request.Headers["host"]
+		for i := range request.Headers {
+			if request.Headers[i].Name == "Host" || request.Headers[i].Name == "host" {
+				authority = request.Headers[i].Value
+			}
 		}
 	}
 	url, err := url.Parse(fmt.Sprintf("%s://%s%s", scheme, authority, request.Path))
@@ -100,8 +105,8 @@ func protoHTTPToRequest(request *Request) (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	for name, value := range request.Headers {
-		targetRequest.Header.Set(name, value)
+	for _, nv := range request.Headers {
+		targetRequest.Header.Add(nv.Name, nv.Value)
 	}
 
 	return targetRequest, nil
@@ -118,9 +123,14 @@ func responseToProtoHTTP(targetResponse *http.Response) (*Response, error) {
 		}
 	}
 
-	responseHeaders := make(map[string]string)
-	for name, _ := range targetResponse.Header {
-		responseHeaders[name] = targetResponse.Header.Get(name)
+	responseHeaders := []*HeaderNameValue{}
+	for name, value := range targetResponse.Header {
+		for _, val := range value {
+			var nv = new(HeaderNameValue)
+			nv.Name = name
+			nv.Value = val
+			responseHeaders = append(responseHeaders, nv)
+		}
 	}
 
 	return &Response{

@@ -2,6 +2,11 @@ syntax = "proto3";
 
 option go_package = ".;main";
 
+message HeaderNameValue {
+    string name = 1;
+    string value = 2;
+}
+
 // A simplified Known Length Request, inspired by Binary HTTP:
 //   https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-binary-message#section-3.1
 message Request {
@@ -25,8 +30,8 @@ message Request {
     Scheme scheme = 2;
     string authority = 3;
     string path = 4;
-    // Header fields
-    map<string, string> headers = 5;
+    // Header fields. Can be same header name but multiple values like for the cookies.
+    repeated HeaderNameValue headers = 5;
     // Content
     bytes body = 6;
     // Padding
@@ -38,8 +43,8 @@ message Request {
 message Response {
     // Control data
     int32 statusCode = 1;
-    // Header fields
-    map<string, string> headers = 2;
+    // Header fields. Can be same header name but multiple values like for the cookies.
+    repeated HeaderNameValue headers = 2;
     // Content
     bytes body = 3;
     // Padding
