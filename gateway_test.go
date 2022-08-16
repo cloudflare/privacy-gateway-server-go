@@ -42,6 +42,8 @@ type MockMetrics struct {
 }
 
 func (s *MockMetrics) Fire(result string) {
+	// This just assertion that we don't call the `Fire` twice,
+	// but it could be changed in the future and this check would be rudimentary
 	if s.isCalled {
 		panic("metric has been called twice")
 	}
