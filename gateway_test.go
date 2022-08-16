@@ -36,22 +36,30 @@ func createGateway(t *testing.T) ohttp.Gateway {
 }
 
 type MockMetrics struct {
-	collector *MockMetricsFactory
+	eventName string
+	isCalled  bool
+	result    string
 }
 
 func (s *MockMetrics) Fire(result string) {
-	s.collector.result = result
+	if s.isCalled {
+		panic("metric has been called twice")
+	}
+
+	s.result = result
+	s.isCalled = true
 }
 
 type MockMetricsFactory struct {
-	eventName string
-	result    string
+	metrics []*MockMetrics
 }
 
 func (f *MockMetricsFactory) Create(eventName string) Metrics {
 	metrics := &MockMetrics{
-		collector: f,
+		eventName: eventName,
+		isCalled:  false,
 	}
+	f.metrics = append(f.metrics, metrics)
 	return metrics
 }
 
@@ -69,8 +77,11 @@ func mustGetMetricsFactory(t *testing.T, gateway gatewayResource) *MockMetricsFa
 
 func (h ForbiddenCheckHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (*http.Response, error) {
 	if req.Host == h.forbidden {
+		metrics.Fire(metricsResultTargetRequestForbidden)
 		return nil, TargetForbiddenError
 	}
+
+	metrics.Fire(metricsResultSuccess)
 	return &http.Response{
 		StatusCode: http.StatusOK,
 	}, nil
@@ -164,13 +175,21 @@ func testBodyContainsError(t *testing.T, resp *http.Response, expectedText strin
 }
 
 func testMetricsContainsResult(t *testing.T, metricsCollector *MockMetricsFactory, event string, result string) {
-	if metricsCollector.eventName == event {
-		if metricsCollector.result != result {
-			t.Fatalf("Expeted event %s to have result %s, got %s", event, result, metricsCollector.result)
-		} else {
-			t.Fatal("foobar")
+
+	for _, metric := range metricsCollector.metrics {
+		if metric.eventName == event {
+			if !metric.isCalled {
+				t.Fatalf("Expected event %s was not fired", event)
+			}
+
+			if metric.result != result {
+				t.Fatalf("Expeted event %s to have result %s, got %s", event, result, metric.result)
+			} else {
+				return
+			}
 		}
 	}
+	t.Fatalf("Expected metric for event %s was not initialized", event)
 }
 
 func TestQueryHandlerInvalidContentType(t *testing.T) {

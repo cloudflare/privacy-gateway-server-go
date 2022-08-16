@@ -129,6 +129,7 @@ type EchoAppHandler struct {
 
 // Handle returns the input request as the response.
 func (h EchoAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]byte, error) {
+	metrics.Fire(metricsResultSuccess)
 	return binaryRequest, nil
 }
 
