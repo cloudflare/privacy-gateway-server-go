@@ -22,7 +22,7 @@ type gatewayResource struct {
 	keyID                 uint8
 	gateway               ohttp.Gateway
 	encapsulationHandlers map[string]EncapsulationHandler
-	debugResponse         bool
+	debug                 bool
 	metricsFactory        MetricsFactory
 }
 
@@ -44,7 +44,7 @@ func (s *gatewayResource) httpError(w http.ResponseWriter, status int, debugMess
 	if s.verbose {
 		log.Println(debugMessage)
 	}
-	if s.debugResponse {
+	if s.debug {
 		http.Error(w, debugMessage, status)
 	} else {
 		http.Error(w, http.StatusText(status), status)
@@ -114,6 +114,10 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *gatewayResource) marshalHandler(w http.ResponseWriter, r *http.Request) {
+	if !s.debug {
+		s.httpError(w, http.StatusForbidden, "Forbidden. Allowed in debug mode only.")
+	}
+
 	if s.verbose {
 		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	}

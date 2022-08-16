@@ -125,7 +125,7 @@ func main() {
 		enableTLSServe = false
 	}
 
-	debugResponse := getBoolEnv(gatewayDebugEnvironmentVariable, false)
+	debug := getBoolEnv(gatewayDebugEnvironmentVariable, false)
 
 	keyID := uint8(0x00) // XXX(caw): make this an environment variable, too, or derive it from the seed
 	config, err := ohttp.NewConfigFromSeed(keyID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128, seed)
@@ -210,7 +210,7 @@ func main() {
 		keyID:                 keyID,
 		gateway:               gateway,
 		encapsulationHandlers: handlers,
-		debugResponse:         debugResponse,
+		debug:                 debug,
 		metricsFactory:        metricsFactory,
 	}
 
