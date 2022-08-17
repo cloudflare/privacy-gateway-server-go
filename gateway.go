@@ -12,6 +12,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/chris-wood/ohttp-go"
@@ -164,6 +165,7 @@ func (s *gatewayResource) marshalHandler(w http.ResponseWriter, r *http.Request)
 	packedRequest := encapsulated.Marshal()
 
 	w.Header().Set("Content-Type", ohttpResponseContentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(packedRequest)))
 	w.Write(packedRequest)
 
 	metrics.Fire(metricsResultSuccess)
