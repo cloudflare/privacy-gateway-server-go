@@ -139,7 +139,7 @@ func (s *gatewayResource) marshalHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	if s.verbose {
-		log.Printf("Body to parse %s\n", string(bodyBytes))
+		log.Printf("Body to parse len %d", len(bodyBytes))
 	}
 
 	var parsedReq, er = http.ReadRequest(bufio.NewReader(bytes.NewReader(bodyBytes)))
