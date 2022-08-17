@@ -137,9 +137,14 @@ func (s *gatewayResource) marshalHandler(w http.ResponseWriter, r *http.Request)
 		s.httpError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
+
+	if s.verbose {
+		log.Printf("Body to parse %s\n", string(bodyBytes))
+	}
+
 	var parsedReq, er = http.ReadRequest(bufio.NewReader(bytes.NewReader(bodyBytes)))
 	if er != nil {
-		s.httpError(w, http.StatusBadRequest, "Reading request body failed")
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed: %s", err.Error()))
 		return
 	}
 
