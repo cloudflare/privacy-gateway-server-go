@@ -30,7 +30,7 @@ message Request {
     Scheme scheme = 2;
     string authority = 3;
     string path = 4;
-    // Header fields. Can be same header name but multiple values like for the cookies.
+    // Header fields. Can be same header name but multiple values like for cookies.
     repeated HeaderNameValue headers = 5;
     // Content
     bytes body = 6;
@@ -43,7 +43,7 @@ message Request {
 message Response {
     // Control data
     int32 statusCode = 1;
-    // Header fields. Can be same header name but multiple values like for the cookies.
+    // Header fields. Can be same header name but multiple values like for cookies.
     repeated HeaderNameValue headers = 2;
     // Content
     bytes body = 3;
