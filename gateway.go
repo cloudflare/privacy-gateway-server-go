@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/hex"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -47,16 +48,6 @@ func (s *gatewayResource) httpError(w http.ResponseWriter, status int, debugMess
 	}
 }
 
-func (s *gatewayResource) parseEncapsulatedRequestFromContent(r *http.Request) (ohttp.EncapsulatedRequest, error) {
-	defer r.Body.Close()
-	encryptedMessageBytes, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		return ohttp.EncapsulatedRequest{}, err
-	}
-
-	return ohttp.UnmarshalEncapsulatedRequest(encryptedMessageBytes)
-}
-
 func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request) {
 	if s.verbose {
 		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
@@ -82,7 +73,19 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	encapsulatedReq, err := s.parseEncapsulatedRequestFromContent(r)
+	defer r.Body.Close()
+	encryptedMessageBytes, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		metrics.Fire(metricsResultInvalidContent)
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed"))
+		return
+	}
+
+	if s.verbose {
+		log.Printf("Request body: %s\n", hex.EncodeToString(encryptedMessageBytes))
+	}
+
+	encapsulatedReq, err := ohttp.UnmarshalEncapsulatedRequest(encryptedMessageBytes)
 	if err != nil {
 		metrics.Fire(metricsResultInvalidContent)
 		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed"))
