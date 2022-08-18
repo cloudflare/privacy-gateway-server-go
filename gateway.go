@@ -139,11 +139,11 @@ func (s *gatewayResource) marshalHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	var unescapedBody = html.UnescapeString(string(bodyBytes))
 	if s.verbose {
 		log.Printf("Body to parse: %s", string(bodyBytes))
+		log.Printf("Body to parse unescaped: %s", unescapedBody)
 	}
-
-	var unescapedBody = html.UnescapeString(string(bodyBytes))
 
 	var parsedReq, er = http.ReadRequest(bufio.NewReader(strings.NewReader(unescapedBody)))
 	if er != nil {
