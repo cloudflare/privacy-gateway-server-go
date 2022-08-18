@@ -31,16 +31,17 @@ const (
 	configEndpoint   = "/ohttp-configs"
 
 	// Environment variables
-	secretSeedEnvironmentVariable   = "SEED_SECRET_KEY"
-	targetOriginAllowList           = "ALLOWED_TARGET_ORIGINS"
-	customRequestEncodingType       = "CUSTOM_REQUEST_TYPE"
-	customResponseEncodingType      = "CUSTOM_RESPONSE_TYPE"
-	certificateEnvironmentVariable  = "CERT"
-	keyEnvironmentVariable          = "KEY"
-	statsdHostVariable              = "MONITORING_STATSD_HOST"
-	statsdPortVariable              = "MONITORING_STATSD_PORT"
-	statsdTimeoutVariable           = "MONITORING_STATSD_TIMEOUT_MS"
-	gatewayDebugEnvironmentVariable = "GATEWAY_DEBUG"
+	configurationIdEnvironmentVariable = "CONFIGURATION_ID"
+	secretSeedEnvironmentVariable      = "SEED_SECRET_KEY"
+	targetOriginAllowList              = "ALLOWED_TARGET_ORIGINS"
+	customRequestEncodingType          = "CUSTOM_REQUEST_TYPE"
+	customResponseEncodingType         = "CUSTOM_RESPONSE_TYPE"
+	certificateEnvironmentVariable     = "CERT"
+	keyEnvironmentVariable             = "KEY"
+	statsdHostVariable                 = "MONITORING_STATSD_HOST"
+	statsdPortVariable                 = "MONITORING_STATSD_PORT"
+	statsdTimeoutVariable              = "MONITORING_STATSD_TIMEOUT_MS"
+	gatewayDebugEnvironmentVariable    = "GATEWAY_DEBUG"
 )
 
 type gatewayServer struct {
@@ -67,6 +68,19 @@ func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 func (s gatewayServer) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	fmt.Fprint(w, "ok")
+}
+
+func getUintEnv(key string, defaultVal uint64) uint64 {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+
+	ret, err := strconv.ParseUint(val, 10, 64)
+	if err != nil {
+		return defaultVal
+	}
+	return ret
 }
 
 func getBoolEnv(key string, defaultVal bool) bool {
@@ -125,8 +139,8 @@ func main() {
 
 	debugResponse := getBoolEnv(gatewayDebugEnvironmentVariable, false)
 
-	keyID := uint8(0x00) // XXX(caw): make this an environment variable, too, or derive it from the seed
-	config, err := ohttp.NewConfigFromSeed(keyID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128, seed)
+	configID := uint8(getUintEnv(configurationIdEnvironmentVariable, 0))
+	config, err := ohttp.NewConfigFromSeed(configID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128, seed)
 	if err != nil {
 		log.Fatalf("Failed to create gateway configuration from seed: %s", err)
 	}
@@ -147,7 +161,7 @@ func main() {
 		requestLabel = "message/bhttp request"
 		responseLabel = "message/bhttp response"
 		targetHandler = DefaultEncapsulationHandler{
-			keyID:   keyID,
+			keyID:   configID,
 			gateway: gateway,
 			appHandler: BinaryHTTPAppHandler{
 				httpHandler: httpHandler,
@@ -156,7 +170,7 @@ func main() {
 	} else if requestLabel == "message/protohttp request" && responseLabel == "message/protohttp response" {
 		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
 		targetHandler = DefaultEncapsulationHandler{
-			keyID:   keyID,
+			keyID:   configID,
 			gateway: gateway,
 			appHandler: ProtoHTTPEncapsulationHandler{
 				httpHandler: httpHandler,
@@ -168,14 +182,14 @@ func main() {
 
 	// Create the echo handler chain
 	echoHandler := DefaultEncapsulationHandler{
-		keyID:      keyID,
+		keyID:      configID,
 		gateway:    gateway,
 		appHandler: EchoAppHandler{},
 	}
 
 	// Create the metadata handler chain
 	metadataHandler := MetadataEncapsulationHandler{
-		keyID:   keyID,
+		keyID:   configID,
 		gateway: gateway,
 	}
 
@@ -205,7 +219,7 @@ func main() {
 	handlers[metadataEndpoint] = metadataHandler // Metadata handler
 	target := &gatewayResource{
 		verbose:               true,
-		keyID:                 keyID,
+		keyID:                 configID,
 		gateway:               gateway,
 		encapsulationHandlers: handlers,
 		debugResponse:         debugResponse,
