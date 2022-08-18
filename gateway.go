@@ -8,11 +8,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/golang/protobuf/proto"
-	"html"
 	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -142,9 +142,15 @@ func (s *gatewayResource) marshalHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var unescapedBody = html.UnescapeString(string(bodyBytes))
 	if s.verbose {
 		log.Printf("Body to parse: %s", string(bodyBytes))
+	}
+
+	var unescapedBody, errr = url.QueryUnescape(string(bodyBytes))
+	if errr != nil {
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Unescaping body failed: %s", errr.Error()))
+	}
+	if s.verbose {
 		log.Printf("Body to parse unescaped: %s", unescapedBody)
 	}
 
