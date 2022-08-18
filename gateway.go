@@ -5,14 +5,15 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"github.com/golang/protobuf/proto"
+	"html"
 	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/chris-wood/ohttp-go"
@@ -142,7 +143,9 @@ func (s *gatewayResource) marshalHandler(w http.ResponseWriter, r *http.Request)
 		log.Printf("Body to parse: %s", string(bodyBytes))
 	}
 
-	var parsedReq, er = http.ReadRequest(bufio.NewReader(bytes.NewReader(bodyBytes)))
+	var unescapedBody = html.UnescapeString(string(bodyBytes))
+
+	var parsedReq, er = http.ReadRequest(bufio.NewReader(strings.NewReader(unescapedBody)))
 	if er != nil {
 		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed: %s", er.Error()))
 		return
