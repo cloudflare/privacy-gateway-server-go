@@ -42,6 +42,7 @@ const (
 	statsdPortVariable                 = "MONITORING_STATSD_PORT"
 	statsdTimeoutVariable              = "MONITORING_STATSD_TIMEOUT_MS"
 	gatewayDebugEnvironmentVariable    = "GATEWAY_DEBUG"
+	gatewayVerboseEnvironmentVariable  = "VERBOSE"
 )
 
 type gatewayServer struct {
@@ -138,6 +139,7 @@ func main() {
 	}
 
 	debugResponse := getBoolEnv(gatewayDebugEnvironmentVariable, false)
+	verbose := getBoolEnv(gatewayVerboseEnvironmentVariable, false)
 
 	configID := uint8(getUintEnv(configurationIdEnvironmentVariable, 0))
 	config, err := ohttp.NewConfigFromSeed(configID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128, seed)
@@ -218,7 +220,7 @@ func main() {
 	handlers[echoEndpoint] = echoHandler         // Content-agnostic handler
 	handlers[metadataEndpoint] = metadataHandler // Metadata handler
 	target := &gatewayResource{
-		verbose:               true,
+		verbose:               verbose,
 		keyID:                 configID,
 		gateway:               gateway,
 		encapsulationHandlers: handlers,
