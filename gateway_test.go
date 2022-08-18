@@ -112,7 +112,7 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 	return gatewayResource{
 		gateway:               gateway,
 		encapsulationHandlers: encapHandlers,
-		debugResponse:         GATEWAY_DEBUG,
+		debug:                 GATEWAY_DEBUG,
 		metricsFactory:        &MockMetricsFactory{},
 	}
 }
