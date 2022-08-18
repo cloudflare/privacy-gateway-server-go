@@ -81,15 +81,15 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if s.verbose {
+		log.Printf("Request body: %s\n", hex.EncodeToString(encryptedMessageBytes))
+	}
+
 	encapsulatedReq, err := ohttp.UnmarshalEncapsulatedRequest(encryptedMessageBytes)
 	if err != nil {
 		metrics.Fire(metricsResultInvalidContent)
 		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed"))
 		return
-	}
-
-	if s.verbose {
-		log.Printf("Request body: %s\n", hex.EncodeToString(encryptedMessageBytes))
 	}
 
 	encapsulatedResp, err := encapHandler.Handle(r, encapsulatedReq, metrics)
