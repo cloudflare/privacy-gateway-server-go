@@ -149,15 +149,15 @@ func (s *gatewayResource) marshalHandler(w http.ResponseWriter, r *http.Request)
 
 	var decoder = base64.NewDecoder(base64.StdEncoding, strings.NewReader(string(bodyBytes)))
 	var reader1 = bufio.NewReader(decoder)
-
-	if s.verbose {
-		var reader2 = bufio.NewReader(decoder)
-		if b, err := io.ReadAll(reader2); err == nil {
-			log.Printf("Body to parse base64 decoded: %s", string(b))
+	var decodedBody = ""
+	if b, err := io.ReadAll(reader1); err == nil {
+		decodedBody = string(b)
+		if s.verbose {
+			log.Printf("Body to parse base64 decoded: %s", decodedBody)
 		}
 	}
 
-	var parsedReq, er = http.ReadRequest(reader1)
+	var parsedReq, er = http.ReadRequest(bufio.NewReader(strings.NewReader(decodedBody)))
 	if er != nil {
 		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed: %s", er.Error()))
 		return
