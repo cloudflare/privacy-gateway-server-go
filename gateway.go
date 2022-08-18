@@ -5,14 +5,15 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"github.com/golang/protobuf/proto"
+	"io"
 	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -146,15 +147,17 @@ func (s *gatewayResource) marshalHandler(w http.ResponseWriter, r *http.Request)
 		log.Printf("Body to parse: %s", string(bodyBytes))
 	}
 
-	var unescapedBody, errr = url.QueryUnescape(string(bodyBytes))
-	if errr != nil {
-		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Unescaping body failed: %s", errr.Error()))
-	}
+	var decoder = base64.NewDecoder(base64.StdEncoding, strings.NewReader(string(bodyBytes)))
+	var reader1 = bufio.NewReader(decoder)
+
 	if s.verbose {
-		log.Printf("Body to parse unescaped: %s", unescapedBody)
+		var reader2 = bufio.NewReader(decoder)
+		if b, err := io.ReadAll(reader2); err == nil {
+			log.Printf("Body to parse base64 decoded: %s", string(b))
+		}
 	}
 
-	var parsedReq, er = http.ReadRequest(bufio.NewReader(strings.NewReader(unescapedBody)))
+	var parsedReq, er = http.ReadRequest(reader1)
 	if er != nil {
 		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed: %s", er.Error()))
 		return
