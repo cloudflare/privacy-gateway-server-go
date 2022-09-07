@@ -116,6 +116,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	packedResponse := encapsulatedResp.Marshal()
 
 	w.Header().Set("Content-Type", ohttpResponseContentType)
+	w.Header().Set("Connection", "Keep-Alive")
 	w.Write(packedResponse)
 }
 
