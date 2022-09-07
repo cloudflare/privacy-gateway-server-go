@@ -217,7 +217,7 @@ func (h BinaryHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]b
 	resp, err := h.httpHandler.Handle(req, metrics)
 	if err != nil {
 		if err == TargetForbiddenError {
-			// Return 401 (Unauthorized) in the event the client request was for a
+			// Return 403 (Forbidden) in the event the client request was for a
 			// Target not on the allow list
 			return h.createWrappedErrorRepsonse(err, http.StatusForbidden)
 		}
