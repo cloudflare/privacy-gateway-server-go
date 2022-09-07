@@ -50,6 +50,7 @@ func (s *gatewayResource) httpError(w http.ResponseWriter, status int, debugMess
 	}
 	if s.debug {
 		http.Error(w, debugMessage, status)
+		w.Write([]byte(debugMessage))
 	} else {
 		http.Error(w, http.StatusText(status), status)
 	}
