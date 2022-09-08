@@ -5,10 +5,9 @@ package main
 
 import (
 	"bytes"
-	"log"
-
 	"errors"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/http/httputil"
 
@@ -219,7 +218,6 @@ func (h BinaryHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]b
 		if err == TargetForbiddenError {
 			// Return 403 (Forbidden) in the event the client request was for a
 			// Target not on the allow list
-			log.Printf("TargetForbiddenError: %s", req.Host)
 			return h.createWrappedErrorRepsonse(err, http.StatusForbidden)
 		}
 		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
@@ -255,6 +253,7 @@ func (h FilteredHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (
 		_, ok := h.allowedOrigins[req.Host]
 		if !ok {
 			metrics.Fire(metricsResultTargetRequestForbidden)
+			log.Printf("TargetForbiddenError: %s", req.Host)
 			return nil, TargetForbiddenError
 		}
 	}
