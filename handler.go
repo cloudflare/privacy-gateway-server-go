@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"log"
 
 	"errors"
 	"io/ioutil"
@@ -171,7 +172,7 @@ func (h ProtoHTTPEncapsulationHandler) Handle(binaryRequest []byte, metrics Metr
 	httpResponse, err := h.httpHandler.Handle(httpRequest, metrics)
 	if err != nil {
 		if err == TargetForbiddenError {
-			// Return 401 (Unauthorized) in the event the client request was for a
+			// Return 403 (Forbidden) in the event the client request was for a
 			// Target not on the allow list
 			return h.createWrappedErrorRepsonse(err, http.StatusForbidden)
 		}
@@ -216,8 +217,9 @@ func (h BinaryHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]b
 	resp, err := h.httpHandler.Handle(req, metrics)
 	if err != nil {
 		if err == TargetForbiddenError {
-			// Return 401 (Unauthorized) in the event the client request was for a
+			// Return 403 (Forbidden) in the event the client request was for a
 			// Target not on the allow list
+			log.Printf("TargetForbiddenError: %s", req.Host)
 			return h.createWrappedErrorRepsonse(err, http.StatusForbidden)
 		}
 		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
