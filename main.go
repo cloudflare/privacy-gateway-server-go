@@ -176,7 +176,7 @@ func main() {
 		targetHandler = DefaultEncapsulationHandler{
 			keyID:   configID,
 			gateway: gateway,
-			appHandler: ProtoHTTPEncapsulationHandler{
+			appHandler: ProtoHTTPAppHandler{
 				httpHandler: httpHandler,
 			},
 		}

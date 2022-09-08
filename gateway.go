@@ -108,6 +108,9 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 		if err == ConfigMismatchError {
 			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
+		} else if err == TargetForbiddenError {
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return
 		} else {
 			http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 			return

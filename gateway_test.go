@@ -99,7 +99,7 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 	mockProtoHTTPFilterHandler := DefaultEncapsulationHandler{
 		keyID:   FIXED_KEY_ID,
 		gateway: gateway,
-		appHandler: ProtoHTTPEncapsulationHandler{
+		appHandler: ProtoHTTPAppHandler{
 			httpHandler: ForbiddenCheckHttpRequestHandler{
 				FORBIDDEN_TARGET,
 			},

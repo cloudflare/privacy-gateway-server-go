@@ -5,15 +5,14 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io/ioutil"
 	"log"
+	"net/http"
+	"net/http/httputil"
 	"strconv"
 	"strings"
 	"time"
-
-	"errors"
-	"io/ioutil"
-	"net/http"
-	"net/http/httputil"
 
 	"github.com/chris-wood/ohttp-go"
 	"google.golang.org/protobuf/proto"
@@ -138,13 +137,13 @@ func (h EchoAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]byte, e
 	return binaryRequest, nil
 }
 
-// ProtoHTTPEncapsulationHandler is an AppContentHandler that parses the application request as
+// ProtoHTTPAppHandler is an AppContentHandler that parses the application request as
 // a protobuf-based HTTP request for resolution with an HttpRequestHandler.
-type ProtoHTTPEncapsulationHandler struct {
+type ProtoHTTPAppHandler struct {
 	httpHandler HttpRequestHandler
 }
 
-func (h ProtoHTTPEncapsulationHandler) createWrappedErrorRepsonse(e error, statusCode int32) ([]byte, error) {
+func (h ProtoHTTPAppHandler) createWrappedErrorRepsonse(e error, statusCode int32) ([]byte, error) {
 	resp := &Response{
 		StatusCode: statusCode,
 		Body:       []byte(e.Error()),
@@ -160,7 +159,7 @@ func (h ProtoHTTPEncapsulationHandler) createWrappedErrorRepsonse(e error, statu
 // translates the result into an equivalent http.Request object to be processed by the handler's HttpRequestHandler.
 // The http.Response result from the handler is then translated back into an equivalent protobuf-based HTTP
 // response and returned to the caller.
-func (h ProtoHTTPEncapsulationHandler) Handle(binaryRequest []byte, metrics Metrics) ([]byte, error) {
+func (h ProtoHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]byte, error) {
 	req := &Request{}
 	if err := proto.Unmarshal(binaryRequest, req); err != nil {
 		metrics.Fire(metricsResultContentDecodingFailed)
@@ -272,6 +271,7 @@ func (h FilteredHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (
 		_, ok := h.allowedOrigins[req.Host]
 		if !ok {
 			metrics.Fire(metricsResultTargetRequestForbidden)
+			log.Printf("TargetForbiddenError: %s", req.Host)
 			return nil, TargetForbiddenError
 		}
 		log.Printf("DEBUG allowedOrigins found?: %s", strconv.FormatBool(ok))
