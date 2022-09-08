@@ -5,6 +5,9 @@ package main
 
 import (
 	"bytes"
+	"log"
+	"strings"
+	"time"
 
 	"errors"
 	"io/ioutil"
@@ -169,22 +172,35 @@ func (h ProtoHTTPEncapsulationHandler) Handle(binaryRequest []byte, metrics Metr
 		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
 	}
 
+	// TODO: REMOVE DEBUG
+	reqid := time.Now().UnixNano()
+	if strings.Contains(httpRequest.Host,
+		"flo-production-content-distribution.s3.amazonaws.com") ||
+		strings.Contains(httpRequest.Host,
+			"/release/media/en/5TkCgYCtfxWwKMgkX3SsOA.png") {
+		log.Printf("DEBUG: %s %s %s %d", httpRequest.Host, httpRequest.Method, httpRequest.URL, reqid)
+	}
+	// END
 	httpResponse, err := h.httpHandler.Handle(httpRequest, metrics)
 	if err != nil {
 		if err == TargetForbiddenError {
 			// Return 403 (Forbidden) in the event the client request was for a
 			// Target not on the allow list
+			log.Printf("DEBUG: WRAPPED 403 %d", reqid)
 			return h.createWrappedErrorRepsonse(err, http.StatusForbidden)
 		}
+		log.Printf("DEBUG: WRAPPED 500 %d", reqid)
 		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
 	}
 
 	protoResponse, err := responseToProtoHTTP(httpResponse)
 	if err != nil {
 		metrics.Fire(metricsResultResponseTranslationFailed)
+		log.Printf("DEBUG: WRAPPED 500-2 %d", reqid)
 		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
 	}
 
+	log.Printf("DEBUG: SUCCESS %d", reqid)
 	return proto.Marshal(protoResponse)
 }
 
