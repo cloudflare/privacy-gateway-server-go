@@ -90,6 +90,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	if s.verbose {
+		// todo: do we really need it at this point?
 		log.Printf("Request body: %s\n", hex.EncodeToString(encryptedMessageBytes))
 	}
 
