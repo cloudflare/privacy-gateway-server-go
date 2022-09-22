@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"net/http/httputil"
-	"strconv"
 	"strings"
 	"time"
 
@@ -267,16 +266,12 @@ type FilteredHttpRequestHandler struct {
 // allowed targets.
 func (h FilteredHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (*http.Response, error) {
 	if h.allowedOrigins != nil {
-		log.Printf("DEBUG FilteredHttpRequestHandler: %s", req.Host)
 		_, ok := h.allowedOrigins[req.Host]
 		if !ok {
 			metrics.Fire(metricsResultTargetRequestForbidden)
-			log.Printf("TargetForbiddenError: %s", req.Host)
+			log.Printf("TargetForbiddenError: %s, %s", req.Host, req.URL)
 			return nil, TargetForbiddenError
 		}
-		log.Printf("DEBUG allowedOrigins found?: %s", strconv.FormatBool(ok))
-	} else {
-		log.Printf("DEBUG: ALLOWED ORIGINS IS NIL")
 	}
 
 	resp, err := h.client.Do(req)
