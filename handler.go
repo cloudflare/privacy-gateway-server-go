@@ -14,9 +14,19 @@ import (
 	"net/http/httputil"
 )
 
+// Errors for Gateway response Http Status:
+
+// 401 - Unauthorized
 var ConfigMismatchError = errors.New("Configuration mismatch")
+
+// 400 - BadRequest
 var EncapsulationError = errors.New("Encapsulation error")
-var TargetForbiddenError = errors.New("Target forbidden")
+
+// 400 - BadRequest. Payload is not a valid protobuf or marshalling error.
+var PayloadMarshallingError = errors.New("Issues with payload marshalling (BHTTP or Protobuf)")
+
+// 403 Forbidden
+var GatewayTargetForbiddenError = errors.New("Target forbidden on gateway (request was blocked by gateway)")
 
 const (
 	// Metrics constants
@@ -159,22 +169,27 @@ func (h ProtoHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]by
 	req := &Request{}
 	if err := proto.Unmarshal(binaryRequest, req); err != nil {
 		metrics.Fire(metricsResultContentDecodingFailed)
-		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
+		return nil, PayloadMarshallingError
 	}
 
 	httpRequest, err := protoHTTPToRequest(req)
 	if err != nil {
 		metrics.Fire(metricsResultRequestTranslationFailed)
-		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
+		return nil, PayloadMarshallingError
 	}
 
 	httpResponse, err := h.httpHandler.Handle(httpRequest, metrics)
 	if err != nil {
-		if err == TargetForbiddenError {
+		// note: its not 403 from target server it 403 from this server (gateway)
+		// 403 returned from the target will be wrapped into payload response
+		if err == GatewayTargetForbiddenError {
 			// Return 403 (Forbidden) in the event the client request was for a
 			// Target not on the allow list
-			return h.createWrappedErrorRepsonse(err, http.StatusForbidden)
+			return nil, GatewayTargetForbiddenError
 		}
+
+		//todo: why to turn everything to 500?
+
 		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
 	}
 
@@ -210,16 +225,19 @@ func (h BinaryHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]b
 	req, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
 	if err != nil {
 		metrics.Fire(metricsResultContentDecodingFailed)
-		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
+		return nil, PayloadMarshallingError
 	}
 
 	resp, err := h.httpHandler.Handle(req, metrics)
 	if err != nil {
-		if err == TargetForbiddenError {
+		if err == GatewayTargetForbiddenError {
 			// Return 403 (Forbidden) in the event the client request was for a
 			// Target not on the allow list
-			return h.createWrappedErrorRepsonse(err, http.StatusForbidden)
+			return nil, GatewayTargetForbiddenError
 		}
+
+		//todo: why to turn everything to 500?
+
 		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
 	}
 
@@ -227,7 +245,7 @@ func (h BinaryHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]b
 	binaryRespEnc, err := binaryResp.Marshal()
 	if err != nil {
 		metrics.Fire(metricsResultContentEncodingFailed)
-		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
+		return nil, PayloadMarshallingError
 	}
 
 	return binaryRespEnc, nil
@@ -254,7 +272,7 @@ func (h FilteredHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (
 		if !ok {
 			metrics.Fire(metricsResultTargetRequestForbidden)
 			log.Printf("TargetForbiddenError: %s, %s", req.Host, req.URL)
-			return nil, TargetForbiddenError
+			return nil, GatewayTargetForbiddenError
 		}
 	}
 
