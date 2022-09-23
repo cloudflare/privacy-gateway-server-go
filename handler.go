@@ -5,19 +5,28 @@ package main
 
 import (
 	"bytes"
-
 	"errors"
-	"io/ioutil"
-	"net/http"
-	"net/http/httputil"
-
 	"github.com/chris-wood/ohttp-go"
 	"google.golang.org/protobuf/proto"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"net/http/httputil"
 )
 
+// Errors for Gateway response Http Status:
+
+// 401 - Unauthorized
 var ConfigMismatchError = errors.New("Configuration mismatch")
+
+// 400 - BadRequest
 var EncapsulationError = errors.New("Encapsulation error")
-var TargetForbiddenError = errors.New("Target forbidden")
+
+// 400 - BadRequest. Payload is not a valid protobuf or marshalling error.
+var PayloadMarshallingError = errors.New("Issues with payload marshalling (BHTTP or Protobuf)")
+
+// 403 Forbidden
+var GatewayTargetForbiddenError = errors.New("Target forbidden on gateway (request was blocked by gateway)")
 
 const (
 	// Metrics constants
@@ -31,6 +40,7 @@ const (
 	metricsResultResponseTranslationFailed = "response_translate_failed"
 	metricsResultTargetRequestForbidden    = "request_forbidden"
 	metricsResultTargetRequestFailed       = "request_failed"
+	metricsResultRequested                 = "requested"
 	metricsResultSuccess                   = "success"
 )
 
@@ -133,13 +143,13 @@ func (h EchoAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]byte, e
 	return binaryRequest, nil
 }
 
-// ProtoHTTPEncapsulationHandler is an AppContentHandler that parses the application request as
+// ProtoHTTPAppHandler is an AppContentHandler that parses the application request as
 // a protobuf-based HTTP request for resolution with an HttpRequestHandler.
-type ProtoHTTPEncapsulationHandler struct {
+type ProtoHTTPAppHandler struct {
 	httpHandler HttpRequestHandler
 }
 
-func (h ProtoHTTPEncapsulationHandler) createWrappedErrorRepsonse(e error, statusCode int32) ([]byte, error) {
+func (h ProtoHTTPAppHandler) createWrappedErrorRepsonse(e error, statusCode int32) ([]byte, error) {
 	resp := &Response{
 		StatusCode: statusCode,
 		Body:       []byte(e.Error()),
@@ -155,26 +165,31 @@ func (h ProtoHTTPEncapsulationHandler) createWrappedErrorRepsonse(e error, statu
 // translates the result into an equivalent http.Request object to be processed by the handler's HttpRequestHandler.
 // The http.Response result from the handler is then translated back into an equivalent protobuf-based HTTP
 // response and returned to the caller.
-func (h ProtoHTTPEncapsulationHandler) Handle(binaryRequest []byte, metrics Metrics) ([]byte, error) {
+func (h ProtoHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]byte, error) {
 	req := &Request{}
 	if err := proto.Unmarshal(binaryRequest, req); err != nil {
 		metrics.Fire(metricsResultContentDecodingFailed)
-		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
+		return nil, PayloadMarshallingError
 	}
 
 	httpRequest, err := protoHTTPToRequest(req)
 	if err != nil {
 		metrics.Fire(metricsResultRequestTranslationFailed)
-		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
+		return nil, PayloadMarshallingError
 	}
 
 	httpResponse, err := h.httpHandler.Handle(httpRequest, metrics)
 	if err != nil {
-		if err == TargetForbiddenError {
-			// Return 401 (Unauthorized) in the event the client request was for a
+		// note: its not 403 from target server it 403 from this server (gateway)
+		// 403 returned from the target will be wrapped into payload response
+		if err == GatewayTargetForbiddenError {
+			// Return 403 (Forbidden) in the event the client request was for a
 			// Target not on the allow list
-			return h.createWrappedErrorRepsonse(err, http.StatusForbidden)
+			return nil, GatewayTargetForbiddenError
 		}
+
+		//todo: why to turn everything to 500?
+
 		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
 	}
 
@@ -210,16 +225,19 @@ func (h BinaryHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]b
 	req, err := ohttp.UnmarshalBinaryRequest(binaryRequest)
 	if err != nil {
 		metrics.Fire(metricsResultContentDecodingFailed)
-		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
+		return nil, PayloadMarshallingError
 	}
 
 	resp, err := h.httpHandler.Handle(req, metrics)
 	if err != nil {
-		if err == TargetForbiddenError {
-			// Return 401 (Unauthorized) in the event the client request was for a
+		if err == GatewayTargetForbiddenError {
+			// Return 403 (Forbidden) in the event the client request was for a
 			// Target not on the allow list
-			return h.createWrappedErrorRepsonse(err, http.StatusForbidden)
+			return nil, GatewayTargetForbiddenError
 		}
+
+		//todo: why to turn everything to 500?
+
 		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
 	}
 
@@ -227,7 +245,7 @@ func (h BinaryHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]b
 	binaryRespEnc, err := binaryResp.Marshal()
 	if err != nil {
 		metrics.Fire(metricsResultContentEncodingFailed)
-		return h.createWrappedErrorRepsonse(err, http.StatusInternalServerError)
+		return nil, PayloadMarshallingError
 	}
 
 	return binaryRespEnc, nil
@@ -253,7 +271,8 @@ func (h FilteredHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (
 		_, ok := h.allowedOrigins[req.Host]
 		if !ok {
 			metrics.Fire(metricsResultTargetRequestForbidden)
-			return nil, TargetForbiddenError
+			log.Printf("TargetForbiddenError: %s, %s", req.Host, req.URL)
+			return nil, GatewayTargetForbiddenError
 		}
 	}
 

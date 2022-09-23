@@ -27,6 +27,7 @@ const (
 	gatewayEndpoint  = "/gateway"
 	echoEndpoint     = "/gateway-echo"
 	metadataEndpoint = "/gateway-metadata"
+	marshalEndpoint  = "/gateway-marshal"
 	healthEndpoint   = "/health"
 	configEndpoint   = "/ohttp-configs"
 
@@ -63,6 +64,7 @@ func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "   Response content type: %s\n", s.responseLabel)
 	fmt.Fprintf(w, "Echo endpoint: https://%s%s\n", r.Host, s.endpoints["Echo"])
 	fmt.Fprintf(w, "Metadata endpoint: https://%s%s\n", r.Host, s.endpoints["Metadata"])
+	fmt.Fprintf(w, "Marshal endpoint: https://%s%s\n", r.Host, s.endpoints["Marshal"])
 	fmt.Fprint(w, "----------------\n")
 }
 
@@ -120,7 +122,7 @@ func main() {
 	var originAllowList string
 	if originAllowList = os.Getenv(targetOriginAllowList); originAllowList != "" {
 		origins := strings.Split(originAllowList, ",")
-		allowedOrigins := make(map[string]bool)
+		allowedOrigins = make(map[string]bool)
 		for _, origin := range origins {
 			allowedOrigins[origin] = true
 		}
@@ -138,7 +140,7 @@ func main() {
 		enableTLSServe = false
 	}
 
-	debugResponse := getBoolEnv(gatewayDebugEnvironmentVariable, false)
+	debug := getBoolEnv(gatewayDebugEnvironmentVariable, false)
 	verbose := getBoolEnv(gatewayVerboseEnvironmentVariable, false)
 
 	configID := uint8(getUintEnv(configurationIdEnvironmentVariable, 0))
@@ -174,7 +176,7 @@ func main() {
 		targetHandler = DefaultEncapsulationHandler{
 			keyID:   configID,
 			gateway: gateway,
-			appHandler: ProtoHTTPEncapsulationHandler{
+			appHandler: ProtoHTTPAppHandler{
 				httpHandler: httpHandler,
 			},
 		}
@@ -224,7 +226,7 @@ func main() {
 		keyID:                 configID,
 		gateway:               gateway,
 		encapsulationHandlers: handlers,
-		debugResponse:         debugResponse,
+		debug:                 debug,
 		metricsFactory:        metricsFactory,
 	}
 
@@ -234,6 +236,7 @@ func main() {
 	endpoints["Config"] = configEndpoint
 	endpoints["Echo"] = echoEndpoint
 	endpoints["Metadata"] = metadataEndpoint
+	endpoints["Marshal"] = marshalEndpoint
 
 	server := gatewayServer{
 		requestLabel:  requestLabel,
@@ -245,6 +248,7 @@ func main() {
 	http.HandleFunc(gatewayEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(echoEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(metadataEndpoint, server.target.gatewayHandler)
+	http.HandleFunc(marshalEndpoint, server.target.marshalHandler)
 	http.HandleFunc(healthEndpoint, server.healthCheckHandler)
 	http.HandleFunc(configEndpoint, target.configHandler)
 	http.HandleFunc("/", server.indexHandler)
