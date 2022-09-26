@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"errors"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/http/httputil"
 
@@ -253,7 +252,6 @@ func (h FilteredHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (
 		_, ok := h.allowedOrigins[req.Host]
 		if !ok {
 			metrics.Fire(metricsResultTargetRequestForbidden)
-			log.Printf("TargetForbiddenError: %s", req.Host)
 			return nil, TargetForbiddenError
 		}
 	}
