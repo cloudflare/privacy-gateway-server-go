@@ -84,11 +84,11 @@ func (h MarshalEncapsulationHandler) Handle(r *http.Request, noData ohttp.Encaps
 	return ohttp.UnmarshalEncapsulatedResponse(packedRequest)
 }
 
-// EchoAppHandler is an AppContentHandler that returns the application request as the response.
+// EchoAppHandler is an AppContentHandler that converts text HTTP request representation into
+// OHTTP-encapsulated protobuf-packed request (ready to be performed by load test client in subsequent requests).
 type MarshalAppHandler struct {
 }
 
-// Handle returns the input request as the response.
 func (h MarshalAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]byte, error) {
 	var parsedReq, er = http.ReadRequest(bufio.NewReader(strings.NewReader(string(binaryRequest))))
 	if er != nil {
