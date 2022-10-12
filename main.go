@@ -197,6 +197,13 @@ func main() {
 		gateway: gateway,
 	}
 
+	// Create the marshal handler chain
+	marshalHandler := MarshalEncapsulationHandler{
+		keyID:      configID,
+		gateway:    gateway,
+		appHandler: MarshalAppHandler{},
+	}
+
 	// Configure metrics
 	metricsHost := os.Getenv(statsdHostVariable)
 	metricsPort := os.Getenv(statsdPortVariable)
@@ -221,6 +228,7 @@ func main() {
 	handlers[gatewayEndpoint] = targetHandler    // Content-specific handler
 	handlers[echoEndpoint] = echoHandler         // Content-agnostic handler
 	handlers[metadataEndpoint] = metadataHandler // Metadata handler
+	handlers[marshalEndpoint] = marshalHandler   // Marshal handler
 	target := &gatewayResource{
 		verbose:               verbose,
 		keyID:                 configID,

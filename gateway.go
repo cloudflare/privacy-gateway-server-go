@@ -4,18 +4,13 @@
 package main
 
 import (
-	"bufio"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"github.com/golang/protobuf/proto"
-	"io"
 	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/chris-wood/ohttp-go"
@@ -77,7 +72,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	var encapHandler EncapsulationHandler
 	var ok bool
 	if encapHandler, ok = s.encapsulationHandlers[r.URL.Path]; !ok {
-		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Unknown handler"))
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Unknown handler for %s", r.URL.Path))
 		return
 	}
 
@@ -85,7 +80,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	encryptedMessageBytes, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		metrics.Fire(metricsResultInvalidContent)
-		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed"))
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed: %s", err))
 		return
 	}
 
@@ -146,57 +141,26 @@ func (s *gatewayResource) marshalHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	defer r.Body.Close()
-	bodyBytes, err := ioutil.ReadAll(r.Body)
+	var encapHandler EncapsulationHandler
+	var ok bool
+	if encapHandler, ok = s.encapsulationHandlers[r.URL.Path]; !ok {
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Unknown handler for %s", r.URL.Path))
+		return
+	}
+
+	packedRequest, err := encapHandler.Handle(r, ohttp.EncapsulatedRequest{}, metrics)
 	if err != nil {
-		s.httpError(w, http.StatusBadRequest, "Invalid request body")
+		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Encapsulation failed: %s", err))
 		return
 	}
 
-	if s.verbose {
-		log.Printf("Body to parse: %s", string(bodyBytes))
-	}
+	s.httpError(w, http.StatusInternalServerError, "Config unavailable")
+	http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 
-	var decoder = base64.NewDecoder(base64.StdEncoding, strings.NewReader(string(bodyBytes)))
-	var reader1 = bufio.NewReader(decoder)
-	var decodedBody = ""
-	if b, err := io.ReadAll(reader1); err == nil {
-		decodedBody = string(b)
-		if s.verbose {
-			log.Printf("Body to parse base64 decoded: %s", decodedBody)
-		}
-	}
-
-	var parsedReq, er = http.ReadRequest(bufio.NewReader(strings.NewReader(decodedBody)))
-	if er != nil {
-		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed: %s", er.Error()))
-		return
-	}
-
-	protoRequest, err := requestToProtoHTTP(parsedReq)
-	if err != nil {
-		s.httpError(w, http.StatusInternalServerError, "Protobuf marshalling failed")
-		return
-	}
-	protoMarshalled, err := proto.Marshal(protoRequest)
-
-	config, err := s.gateway.Config(s.keyID)
-	if err != nil {
-		log.Printf("Config unavailable")
-		s.httpError(w, http.StatusInternalServerError, "Config unavailable")
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-
-	// todo: get labels there instead of hardcode
-	ohttpClient := ohttp.NewCustomClient(config, "message/protohttp request", "message/protohttp response")
-	encapsulated, _, err := ohttpClient.EncapsulateRequest(protoMarshalled)
-
-	packedRequest := encapsulated.Marshal()
-
+	content := packedRequest.Marshal()
 	w.Header().Set("Content-Type", ohttpResponseContentType)
-	w.Header().Set("Content-Length", strconv.Itoa(len(packedRequest)))
-	w.Write(packedRequest)
+	w.Header().Set("Content-Length", strconv.Itoa(len(content)))
+	w.Write(content)
 
 	metrics.Fire(metricsResultSuccess)
 }
