@@ -399,7 +399,7 @@ func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, _, err := client.EncapsulateRequest(encodedRequest)
+	req, context, err := client.EncapsulateRequest(encodedRequest)
 	reqEnc := req.Marshal()
 
 	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
@@ -411,37 +411,33 @@ func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, request)
 
-	if status := rr.Result().StatusCode; status != http.StatusForbidden {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusForbidden, status))
+	if status := rr.Result().StatusCode; status != http.StatusOK {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
 	}
 
-	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultTargetRequestForbidden)
+	bodyBytes, err := ioutil.ReadAll(rr.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	/*
-		bodyBytes, err := ioutil.ReadAll(rr.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
+	encapResp, err := ohttp.UnmarshalEncapsulatedResponse(bodyBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-		encapResp, err := ohttp.UnmarshalEncapsulatedResponse(bodyBytes)
-		if err != nil {
-			t.Fatal(err)
-		}
+	binaryResp, err := context.DecapsulateResponse(encapResp)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-		binaryResp, err := context.DecapsulateResponse(encapResp)
-		if err != nil {
-			t.Fatal(err)
-		}
+	resp := &Response{}
+	if err := proto.Unmarshal(binaryResp, resp); err != nil {
+		t.Fatal(err)
+	}
 
-		resp := &Response{}
-		if err := proto.Unmarshal(binaryResp, resp); err != nil {
-			t.Fatal(err)
-		}
-
-		if resp.StatusCode != http.StatusForbidden {
-			t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusForbidden, resp.StatusCode))
-		}
-	*/
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusForbidden, resp.StatusCode))
+	}
 
 	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultTargetRequestForbidden)
 }
