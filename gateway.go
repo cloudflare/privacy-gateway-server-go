@@ -120,6 +120,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 func (s *gatewayResource) marshalHandler(w http.ResponseWriter, r *http.Request) {
 	if !s.debug {
 		s.httpError(w, http.StatusForbidden, "Forbidden. Allowed in debug mode only.")
+		return
 	}
 
 	if s.verbose {
