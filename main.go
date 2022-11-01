@@ -120,7 +120,7 @@ func main() {
 	var originAllowList string
 	if originAllowList = os.Getenv(targetOriginAllowList); originAllowList != "" {
 		origins := strings.Split(originAllowList, ",")
-		allowedOrigins := make(map[string]bool)
+		allowedOrigins = make(map[string]bool)
 		for _, origin := range origins {
 			allowedOrigins[origin] = true
 		}
@@ -149,8 +149,9 @@ func main() {
 
 	// Create the default HTTP handler
 	httpHandler := FilteredHttpRequestHandler{
-		client:         &http.Client{},
-		allowedOrigins: allowedOrigins,
+		client:             &http.Client{},
+		allowedOrigins:     allowedOrigins,
+		logForbiddenErrors: verbose,
 	}
 
 	// Create the default gateway and its request handler chain
@@ -174,7 +175,7 @@ func main() {
 		targetHandler = DefaultEncapsulationHandler{
 			keyID:   configID,
 			gateway: gateway,
-			appHandler: ProtoHTTPEncapsulationHandler{
+			appHandler: ProtoHTTPAppHandler{
 				httpHandler: httpHandler,
 			},
 		}

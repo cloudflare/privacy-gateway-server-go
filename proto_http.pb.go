@@ -197,7 +197,7 @@ type Request struct {
 	Scheme    Request_Scheme `protobuf:"varint,2,opt,name=scheme,proto3,enum=Request_Scheme" json:"scheme,omitempty"`
 	Authority string         `protobuf:"bytes,3,opt,name=authority,proto3" json:"authority,omitempty"`
 	Path      string         `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
-	// Header fields. Can be same header name but multiple values like for the cookies.
+	// Header fields. Can be same header name but multiple values like for cookies.
 	Headers []*HeaderNameValue `protobuf:"bytes,5,rep,name=headers,proto3" json:"headers,omitempty"`
 	// Content
 	Body []byte `protobuf:"bytes,6,opt,name=body,proto3" json:"body,omitempty"`
@@ -295,7 +295,7 @@ type Response struct {
 
 	// Control data
 	StatusCode int32 `protobuf:"varint,1,opt,name=statusCode,proto3" json:"statusCode,omitempty"`
-	// Header fields. Can be same header name but multiple values like for the cookies.
+	// Header fields. Can be same header name but multiple values like for cookies.
 	Headers []*HeaderNameValue `protobuf:"bytes,2,rep,name=headers,proto3" json:"headers,omitempty"`
 	// Content
 	Body []byte `protobuf:"bytes,3,opt,name=body,proto3" json:"body,omitempty"`
