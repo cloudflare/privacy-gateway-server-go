@@ -25,6 +25,10 @@ func (s *StatsDMetrics) Fire(result string) {
 	}
 }
 
+func (s *StatsDMetrics) ResponseStatus(prefix string, status int) {
+	s.Fire(fmt.Sprintf("%s_response_status_%d", prefix, status))
+}
+
 func createStatsDClient(host, port string, timeout int) (statsd.ClientInterface, error) {
 	if host == "" || port == "" {
 		return &statsd.NoOpClient{}, nil

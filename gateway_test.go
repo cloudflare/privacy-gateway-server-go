@@ -36,20 +36,21 @@ func createGateway(t *testing.T) ohttp.Gateway {
 }
 
 type MockMetrics struct {
-	eventName string
-	isCalled  bool
-	result    string
+	eventName    string
+	resultLabels map[string]bool
+}
+
+func (s *MockMetrics) ResponseStatus(prefix string, status int) {
+	s.Fire(fmt.Sprintf("%s_response_status_%d", prefix, status))
 }
 
 func (s *MockMetrics) Fire(result string) {
-	// This just assertion that we don't call the `Fire` twice,
-	// but it could be changed in the future and this check would be rudimentary
-	if s.isCalled {
-		panic("metric has been called twice")
+	// This just assertion that we don't call the `Fire` twice for the same result/label
+	_, exists := s.resultLabels[result]
+	if exists {
+		panic("Metrics.Fire called twice for the same result")
 	}
-
-	s.result = result
-	s.isCalled = true
+	s.resultLabels[result] = true
 }
 
 type MockMetricsFactory struct {
@@ -58,8 +59,8 @@ type MockMetricsFactory struct {
 
 func (f *MockMetricsFactory) Create(eventName string) Metrics {
 	metrics := &MockMetrics{
-		eventName: eventName,
-		isCalled:  false,
+		eventName:    eventName,
+		resultLabels: map[string]bool{},
 	}
 	f.metrics = append(f.metrics, metrics)
 	return metrics
@@ -80,7 +81,7 @@ func mustGetMetricsFactory(t *testing.T, gateway gatewayResource) *MockMetricsFa
 func (h ForbiddenCheckHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (*http.Response, error) {
 	if req.Host == h.forbidden {
 		metrics.Fire(metricsResultTargetRequestForbidden)
-		return nil, TargetForbiddenError
+		return nil, GatewayTargetForbiddenError
 	}
 
 	metrics.Fire(metricsResultSuccess)
@@ -99,7 +100,7 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 	mockProtoHTTPFilterHandler := DefaultEncapsulationHandler{
 		keyID:   FIXED_KEY_ID,
 		gateway: gateway,
-		appHandler: ProtoHTTPEncapsulationHandler{
+		appHandler: ProtoHTTPAppHandler{
 			httpHandler: ForbiddenCheckHttpRequestHandler{
 				FORBIDDEN_TARGET,
 			},
@@ -180,12 +181,9 @@ func testMetricsContainsResult(t *testing.T, metricsCollector *MockMetricsFactor
 
 	for _, metric := range metricsCollector.metrics {
 		if metric.eventName == event {
-			if !metric.isCalled {
-				t.Fatalf("Expected event %s was not fired", event)
-			}
-
-			if metric.result != result {
-				t.Fatalf("Expeted event %s to have result %s, got %s", event, result, metric.result)
+			_, exists := metric.resultLabels[result]
+			if !exists {
+				t.Fatalf("Expected event %s/%s was not fired. resultLabels len=%d", event, result, len(metric.resultLabels))
 			} else {
 				return
 			}
