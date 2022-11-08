@@ -292,6 +292,19 @@ func (h BinaryHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]b
 	return binaryRespEnc, r
 }
 
+type TempCompositeAppHandler struct {
+	bhttpHandler BinaryHTTPAppHandler
+	protoHandler ProtoHTTPAppHandler
+}
+
+func (h TempCompositeAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]byte, error) {
+	binaryResponse, err := h.protoHandler.Handle(binaryRequest, metrics)
+	if err == nil {
+		return binaryResponse, err
+	}
+	return h.bhttpHandler.Handle(binaryRequest, metrics)
+}
+
 // HttpRequestHandler handles HTTP requests to produce responses.
 type HttpRequestHandler interface {
 	// Handle takes a http.Request and resolves it to produce a http.Response.

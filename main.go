@@ -153,7 +153,14 @@ func main() {
 		allowedOrigins:     allowedOrigins,
 		logForbiddenErrors: verbose,
 	}
-
+	compositeAppHandler := TempCompositeAppHandler{
+		bhttpHandler: BinaryHTTPAppHandler{
+			httpHandler: httpHandler,
+		},
+		protoHandler: ProtoHTTPAppHandler{
+			httpHandler: httpHandler,
+		},
+	}
 	// Create the default gateway and its request handler chain
 	var gateway ohttp.Gateway
 	var targetHandler EncapsulationHandler
@@ -164,20 +171,16 @@ func main() {
 		requestLabel = "message/bhttp request"
 		responseLabel = "message/bhttp response"
 		targetHandler = DefaultEncapsulationHandler{
-			keyID:   configID,
-			gateway: gateway,
-			appHandler: BinaryHTTPAppHandler{
-				httpHandler: httpHandler,
-			},
+			keyID:      configID,
+			gateway:    gateway,
+			appHandler: compositeAppHandler,
 		}
 	} else if requestLabel == "message/protohttp request" && responseLabel == "message/protohttp response" {
 		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
 		targetHandler = DefaultEncapsulationHandler{
-			keyID:   configID,
-			gateway: gateway,
-			appHandler: ProtoHTTPAppHandler{
-				httpHandler: httpHandler,
-			},
+			keyID:      configID,
+			gateway:    gateway,
+			appHandler: compositeAppHandler,
 		}
 	} else {
 		panic("Unsupported application content handler")
