@@ -23,6 +23,11 @@ type gatewayResource struct {
 	metricsFactory        MetricsFactory
 }
 
+type HttpErr struct {
+	StatusCode int
+	Message    string
+}
+
 const (
 	ohttpRequestContentType  = "message/ohttp-req"
 	ohttpResponseContentType = "message/ohttp-res"
@@ -38,75 +43,72 @@ const (
 	metricsResultInvalidContent     = "invalid_content"
 )
 
-func (s *gatewayResource) httpError(w http.ResponseWriter, status int, debugMessage string, metrics Metrics, metricsPrefix string) {
-	if s.verbose {
-		log.Println(debugMessage)
-	}
+func (s *gatewayResource) httpError(status int, debugMessage string) (ohttp.EncapsulatedResponse, HttpErr) {
+	var msg = http.StatusText(status)
 	if s.debugResponse {
-		http.Error(w, debugMessage, status)
-	} else {
-		http.Error(w, http.StatusText(status), status)
+		msg = debugMessage
 	}
-	metrics.ResponseStatus(metricsPrefix, status)
+	return ohttp.EncapsulatedResponse{}, HttpErr{status, msg}
+}
+
+func (s *gatewayResource) gatewayHandlerLogic(r *http.Request, metrics Metrics) (ohttp.EncapsulatedResponse, HttpErr) {
+	if r.Method != http.MethodPost {
+		metrics.Fire(metricsResultInvalidMethod)
+		return s.httpError(http.StatusBadRequest, fmt.Sprintf("Invalid method: %s", r.Method))
+	}
+	if r.Header.Get("Content-Type") != ohttpRequestContentType {
+		metrics.Fire(metricsResultInvalidContentType)
+		return s.httpError(http.StatusBadRequest, fmt.Sprintf("Invalid content type: %s", r.Header.Get("Content-Type")))
+	}
+	var encapHandler EncapsulationHandler
+	var ok bool
+	if encapHandler, ok = s.encapsulationHandlers[r.URL.Path]; !ok {
+		metrics.Fire(metricsResultInvalidContentType)
+		return s.httpError(http.StatusBadRequest, fmt.Sprintf("Unknown handler"))
+	}
+	defer r.Body.Close()
+	encryptedMessageBytes, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		metrics.Fire(metricsResultInvalidContent)
+		return s.httpError(http.StatusBadRequest, fmt.Sprintf("Reading request body failed"))
+	}
+	encapsulatedReq, err := ohttp.UnmarshalEncapsulatedRequest(encryptedMessageBytes)
+	if err != nil {
+		metrics.Fire(metricsResultInvalidContent)
+		return s.httpError(http.StatusBadRequest, fmt.Sprintf("Reading request body failed"))
+	}
+	encapsulatedResp, err := encapHandler.Handle(r, encapsulatedReq, metrics)
+	if err != nil {
+		if s.verbose {
+			log.Printf(err.Error())
+		}
+		errorStatusCode := encapsulationErrorToGatewayStatusCode(err)
+		return s.httpError(errorStatusCode, http.StatusText(errorStatusCode))
+	}
+	return encapsulatedResp, HttpErr{http.StatusOK, ""}
 }
 
 func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request) {
 	if s.verbose {
 		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	}
-
 	metrics := s.metricsFactory.Create(metricsEventGatewayRequest)
 
-	if r.Method != http.MethodPost {
-		metrics.Fire(metricsResultInvalidMethod)
-		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Invalid method: %s", r.Method), metrics, r.Method)
-		return
-	}
-	if r.Header.Get("Content-Type") != ohttpRequestContentType {
-		metrics.Fire(metricsResultInvalidContentType)
-		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Invalid content type: %s", r.Header.Get("Content-Type")), metrics, r.Method)
-		return
-	}
+	encapsulatedResp, httpErr := s.gatewayHandlerLogic(r, metrics)
 
-	var encapHandler EncapsulationHandler
-	var ok bool
-	if encapHandler, ok = s.encapsulationHandlers[r.URL.Path]; !ok {
-		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Unknown handler"), metrics, r.Method)
-		return
-	}
-
-	defer r.Body.Close()
-	encryptedMessageBytes, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		metrics.Fire(metricsResultInvalidContent)
-		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed"), metrics, r.Method)
-		return
-	}
-
-	encapsulatedReq, err := ohttp.UnmarshalEncapsulatedRequest(encryptedMessageBytes)
-	if err != nil {
-		metrics.Fire(metricsResultInvalidContent)
-		s.httpError(w, http.StatusBadRequest, fmt.Sprintf("Reading request body failed"), metrics, r.Method)
-		return
-	}
-
-	encapsulatedResp, err := encapHandler.Handle(r, encapsulatedReq, metrics)
-	if err != nil {
+	if httpErr.StatusCode != http.StatusOK {
+		metrics.ResponseStatus(r.Method, httpErr.StatusCode)
 		if s.verbose {
-			log.Printf(err.Error())
+			log.Println(httpErr.Message)
 		}
-
-		errorCode := encapsulationErrorToGatewayStatusCode(err)
-		s.httpError(w, errorCode, http.StatusText(errorCode), metrics, r.Method)
-		return
+		http.Error(w, httpErr.Message, httpErr.StatusCode)
+	} else {
+		metrics.ResponseStatus(r.Method, http.StatusOK)
+		w.Header().Set("Content-Type", ohttpResponseContentType)
+		w.Header().Set("Connection", "Keep-Alive")
+		packedResponse := encapsulatedResp.Marshal()
+		w.Write(packedResponse)
 	}
-
-	packedResponse := encapsulatedResp.Marshal()
-
-	w.Header().Set("Content-Type", ohttpResponseContentType)
-	w.Header().Set("Connection", "Keep-Alive")
-	w.Write(packedResponse)
-	metrics.ResponseStatus(r.Method, http.StatusOK)
 }
 
 func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +121,8 @@ func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		log.Printf("Config unavailable")
 		metrics.Fire(metricsResultConfigsUnavalable)
-		s.httpError(w, http.StatusInternalServerError, "Config unavailable", metrics, r.Method)
+		_, httpErr := s.httpError(http.StatusInternalServerError, "Config unavailable")
+		http.Error(w, httpErr.Message, httpErr.StatusCode)
 		return
 	}
 
@@ -132,3 +135,19 @@ func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) 
 
 	metrics.ResponseStatus(r.Method, http.StatusOK)
 }
+
+/*
+type TempCompositeGateway struct {
+	bhttpGateway gatewayResource
+	protoGateway gatewayResource
+}
+
+func (s *TempCompositeGateway) gatewayHandler(w http.ResponseWriter, r *http.Request) {
+	if
+	binaryResponse, err := h.protoHandler.Handle(binaryRequest, metrics)
+	if err == nil {
+		return binaryResponse, err
+	}
+	return h.bhttpHandler.Handle(binaryRequest, metrics)
+}
+*/

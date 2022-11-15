@@ -9,7 +9,6 @@ import (
 	"github.com/chris-wood/ohttp-go"
 	"google.golang.org/protobuf/proto"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/http/httputil"
 	"strconv"
@@ -185,7 +184,7 @@ type ProtoHTTPAppHandler struct {
 }
 
 // returns the same object format as for PayloadSuccess moving error inside successful response
-func (h ProtoHTTPAppHandler) wrappedError(e error, metrics Metrics) ([]byte, error) {
+func (h ProtoHTTPAppHandler) wrappedError(e error, metrics Metrics, outcomeName string) ([]byte, error) {
 	status := payloadErrorToPayloadStatusCode(e)
 	resp := &Response{
 		StatusCode: int32(status),
@@ -195,6 +194,7 @@ func (h ProtoHTTPAppHandler) wrappedError(e error, metrics Metrics) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
+	metrics.Fire(outcomeName)
 	metrics.ResponseStatus(metricsPayloadStatusPrefix, status)
 	return respEnc, nil
 }
@@ -206,14 +206,12 @@ func (h ProtoHTTPAppHandler) wrappedError(e error, metrics Metrics) ([]byte, err
 func (h ProtoHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]byte, error) {
 	req := &Request{}
 	if err := proto.Unmarshal(binaryRequest, req); err != nil {
-		metrics.Fire(metricsResultContentDecodingFailed)
-		return h.wrappedError(PayloadMarshallingError, metrics)
+		return h.wrappedError(PayloadMarshallingError, metrics, metricsResultContentDecodingFailed)
 	}
 
 	httpRequest, err := protoHTTPToRequest(req)
 	if err != nil {
-		metrics.Fire(metricsResultRequestTranslationFailed)
-		return h.wrappedError(PayloadMarshallingError, metrics)
+		return h.wrappedError(PayloadMarshallingError, metrics, metricsResultRequestTranslationFailed)
 	}
 
 	httpResponse, err := h.httpHandler.Handle(httpRequest, metrics)
@@ -221,21 +219,22 @@ func (h ProtoHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]by
 		if err == GatewayTargetForbiddenError {
 			// Return 403 (Forbidden) in the event the client request was for a
 			// Target not on the allow list
-			return h.wrappedError(GatewayTargetForbiddenError, metrics)
+			// to allow clients to fix improper third party urls usage (e.g. to change URLs from our direct s3 refs to CDN)
+			// already not needed:
+			// log.Printf("TargetForbiddenError: %s, %s", httpRequest.Host, httpRequest.URL)
+			return h.wrappedError(GatewayTargetForbiddenError, metrics, metricsResultTargetRequestForbidden)
 		}
-		return h.wrappedError(GatewayInternalServerError, metrics)
+		return h.wrappedError(GatewayInternalServerError, metrics, metricsResultTargetRequestFailed)
 	}
 
 	protoResponse, err := responseToProtoHTTP(httpResponse)
 	if err != nil {
-		metrics.Fire(metricsResultResponseTranslationFailed)
-		return h.wrappedError(PayloadMarshallingError, metrics)
+		return h.wrappedError(PayloadMarshallingError, metrics, metricsResultResponseTranslationFailed)
 	}
 
 	marshalledProtoResponse, err := proto.Marshal(protoResponse)
 	if err != nil {
-		metrics.Fire(metricsResultContentEncodingFailed)
-		return h.wrappedError(PayloadMarshallingError, metrics)
+		return h.wrappedError(PayloadMarshallingError, metrics, metricsResultContentEncodingFailed)
 	}
 	metrics.Fire(metricsPayloadStatusPrefix + "200")
 	var r error = nil
@@ -292,17 +291,18 @@ func (h BinaryHTTPAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]b
 	return binaryRespEnc, r
 }
 
-type TempCompositeAppHandler struct {
-	bhttpHandler BinaryHTTPAppHandler
-	protoHandler ProtoHTTPAppHandler
+type TryBothEncapsulationHandler struct {
+	bhttpHandler EncapsulationHandler
+	protoHandler EncapsulationHandler
 }
 
-func (h TempCompositeAppHandler) Handle(binaryRequest []byte, metrics Metrics) ([]byte, error) {
-	binaryResponse, err := h.protoHandler.Handle(binaryRequest, metrics)
-	if err == nil {
-		return binaryResponse, err
+func (h TryBothEncapsulationHandler) Handle(outerRequest *http.Request, encapRequest ohttp.EncapsulatedRequest, metrics Metrics) (ohttp.EncapsulatedResponse, error) {
+	encapResponse, err := h.protoHandler.Handle(outerRequest, encapRequest, metrics)
+	// try different handler in case decapsulation failed which means next encap type can be tried
+	if err != EncapsulationError {
+		return encapResponse, err
 	}
-	return h.bhttpHandler.Handle(binaryRequest, metrics)
+	return h.bhttpHandler.Handle(outerRequest, encapRequest, metrics)
 }
 
 // HttpRequestHandler handles HTTP requests to produce responses.
@@ -314,9 +314,8 @@ type HttpRequestHandler interface {
 // FilteredHttpRequestHandler represents a HttpRequestHandler that restricts
 // outbound HTTP requests to an allowed set of targets.
 type FilteredHttpRequestHandler struct {
-	client             *http.Client
-	allowedOrigins     map[string]bool
-	logForbiddenErrors bool
+	client         *http.Client
+	allowedOrigins map[string]bool
 }
 
 // Handle processes HTTP requests to targets that are permitted according to a list of
@@ -325,21 +324,14 @@ func (h FilteredHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (
 	if h.allowedOrigins != nil {
 		_, ok := h.allowedOrigins[req.Host]
 		if !ok {
-			metrics.Fire(metricsResultTargetRequestForbidden)
-			if h.logForbiddenErrors {
-				// to allow clients to fix improper third party urls usage (e.g. to change URLs from our direct s3 refs to CDN)
-				log.Printf("TargetForbiddenError: %s, %s", req.Host, req.URL)
-			}
 			return nil, GatewayTargetForbiddenError
 		}
 	}
 
 	resp, err := h.client.Do(req)
 	if err != nil {
-		metrics.Fire(metricsResultTargetRequestFailed)
 		return nil, err
 	}
 
-	metrics.Fire(metricsResultSuccess)
 	return resp, nil
 }

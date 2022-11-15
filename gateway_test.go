@@ -26,7 +26,7 @@ var (
 	GATEWAY_DEBUG    = true
 )
 
-func createGateway(t *testing.T) ohttp.Gateway {
+func createDefaultGateway(t *testing.T) ohttp.Gateway {
 	config, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
 	if err != nil {
 		t.Fatal("Failed to create a valid config. Exiting now.")
@@ -35,9 +35,18 @@ func createGateway(t *testing.T) ohttp.Gateway {
 	return ohttp.NewDefaultGateway(config)
 }
 
+func createProtoGateway(t *testing.T) ohttp.Gateway {
+	config, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+	if err != nil {
+		t.Fatal("Failed to create a valid config. Exiting now.")
+	}
+
+	return ohttp.NewCustomGateway(config, "message/protohttp request", "message/protohttp response")
+}
+
 type MockMetrics struct {
 	eventName    string
-	resultLabels map[string]bool
+	resultLabels map[string]int
 }
 
 func (s *MockMetrics) ResponseStatus(prefix string, status int) {
@@ -46,11 +55,14 @@ func (s *MockMetrics) ResponseStatus(prefix string, status int) {
 
 func (s *MockMetrics) Fire(result string) {
 	// This just assertion that we don't call the `Fire` twice for the same result/label
-	_, exists := s.resultLabels[result]
-	if exists {
-		panic("Metrics.Fire called twice for the same result")
+	counter, exists := s.resultLabels[result]
+	if !exists {
+		counter = 0
 	}
-	s.resultLabels[result] = true
+	if counter > 2 {
+		panic("Metrics.Fire called more than twice for TryBothEncapsulationHandler")
+	}
+	s.resultLabels[result] = counter + 1
 }
 
 type MockMetricsFactory struct {
@@ -60,7 +72,7 @@ type MockMetricsFactory struct {
 func (f *MockMetricsFactory) Create(eventName string) Metrics {
 	metrics := &MockMetrics{
 		eventName:    eventName,
-		resultLabels: map[string]bool{},
+		resultLabels: map[string]int{},
 	}
 	f.metrics = append(f.metrics, metrics)
 	return metrics
@@ -91,34 +103,38 @@ func (h ForbiddenCheckHttpRequestHandler) Handle(req *http.Request, metrics Metr
 }
 
 func createMockEchoGatewayServer(t *testing.T) gatewayResource {
-	gateway := createGateway(t)
+	protoGateway := createProtoGateway(t)
+	defaultGateway := createDefaultGateway(t)
 	echoEncapHandler := DefaultEncapsulationHandler{
 		keyID:      FIXED_KEY_ID,
-		gateway:    gateway,
+		gateway:    protoGateway,
 		appHandler: EchoAppHandler{},
 	}
 	httpHandler := ForbiddenCheckHttpRequestHandler{
 		FORBIDDEN_TARGET,
 	}
-	compositeAppHandler := TempCompositeAppHandler{
-		bhttpHandler: BinaryHTTPAppHandler{
-			httpHandler: httpHandler,
+	mockTryBothEncapsulationHandler := TryBothEncapsulationHandler{
+		bhttpHandler: DefaultEncapsulationHandler{
+			keyID:   FIXED_KEY_ID,
+			gateway: defaultGateway,
+			appHandler: BinaryHTTPAppHandler{
+				httpHandler: httpHandler,
+			},
 		},
-		protoHandler: ProtoHTTPAppHandler{
-			httpHandler: httpHandler,
+		protoHandler: DefaultEncapsulationHandler{
+			keyID:   FIXED_KEY_ID,
+			gateway: protoGateway,
+			appHandler: ProtoHTTPAppHandler{
+				httpHandler: httpHandler,
+			},
 		},
-	}
-	mockProtoHTTPFilterHandler := DefaultEncapsulationHandler{
-		keyID:      FIXED_KEY_ID,
-		gateway:    gateway,
-		appHandler: compositeAppHandler,
 	}
 
 	encapHandlers := make(map[string]EncapsulationHandler)
 	encapHandlers[echoEndpoint] = echoEncapHandler
-	encapHandlers[gatewayEndpoint] = mockProtoHTTPFilterHandler
+	encapHandlers[gatewayEndpoint] = mockTryBothEncapsulationHandler
 	return gatewayResource{
-		gateway:               gateway,
+		gateway:               protoGateway,
 		encapsulationHandlers: encapHandlers,
 		debugResponse:         GATEWAY_DEBUG,
 		metricsFactory:        &MockMetricsFactory{},
@@ -230,7 +246,8 @@ func TestGatewayHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := ohttp.NewDefaultClient(config)
+
+	client := ohttp.NewCustomClient(config, "message/protohttp request", "message/protohttp response")
 
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
@@ -388,7 +405,7 @@ func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := ohttp.NewDefaultClient(config)
+	client := ohttp.NewCustomClient(config, "message/protohttp request", "message/protohttp response")
 
 	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", FORBIDDEN_TARGET, gatewayEndpoint), nil)
 	if err != nil {
@@ -456,7 +473,7 @@ func TestGatewayHandlerProtoHTTPRequestWithAllowedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := ohttp.NewDefaultClient(config)
+	client := ohttp.NewCustomClient(config, "message/protohttp request", "message/protohttp response")
 
 	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", ALLOWED_TARGET, gatewayEndpoint), nil)
 	if err != nil {
