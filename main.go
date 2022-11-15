@@ -155,6 +155,7 @@ func main() {
 
 	// Create the default gateway and its request handler chain
 	var defaultGateway = ohttp.NewDefaultGateway(config)
+	var protoGateway = ohttp.NewCustomGateway(config, "message/protohttp request", "message/protohttp response")
 
 	var targetHandler = TryBothEncapsulationHandler{
 		bhttpHandler: DefaultEncapsulationHandler{
@@ -166,7 +167,7 @@ func main() {
 		},
 		protoHandler: DefaultEncapsulationHandler{
 			keyID:   configID,
-			gateway: ohttp.NewCustomGateway(config, "message/protohttp request", "message/protohttp response"),
+			gateway: protoGateway,
 			appHandler: ProtoHTTPAppHandler{
 				httpHandler: httpHandler,
 			},
@@ -214,6 +215,7 @@ func main() {
 		verbose:               verbose,
 		keyID:                 configID,
 		encapsulationHandlers: handlers,
+		gateway:               defaultGateway,
 		debugResponse:         debugResponse,
 		metricsFactory:        metricsFactory,
 	}
