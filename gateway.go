@@ -135,19 +135,3 @@ func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) 
 
 	metrics.ResponseStatus(r.Method, http.StatusOK)
 }
-
-/*
-type TempCompositeGateway struct {
-	bhttpGateway gatewayResource
-	protoGateway gatewayResource
-}
-
-func (s *TempCompositeGateway) gatewayHandler(w http.ResponseWriter, r *http.Request) {
-	if
-	binaryResponse, err := h.protoHandler.Handle(binaryRequest, metrics)
-	if err == nil {
-		return binaryResponse, err
-	}
-	return h.bhttpHandler.Handle(binaryRequest, metrics)
-}
-*/
