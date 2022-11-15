@@ -154,13 +154,13 @@ func main() {
 	}
 
 	// Create the default gateway and its request handler chain
-	var defaultGateway = ohttp.NewDefaultGateway(config)
+	var bhttpGateway = ohttp.NewDefaultGateway(config)
 	var protoGateway = ohttp.NewCustomGateway(config, "message/protohttp request", "message/protohttp response")
 
 	var targetHandler = TryBothEncapsulationHandler{
 		bhttpHandler: DefaultEncapsulationHandler{
 			keyID:   configID,
-			gateway: defaultGateway,
+			gateway: bhttpGateway,
 			appHandler: BinaryHTTPAppHandler{
 				httpHandler: httpHandler,
 			},
@@ -177,14 +177,14 @@ func main() {
 	// Create the echo handler chain
 	echoHandler := DefaultEncapsulationHandler{
 		keyID:      configID,
-		gateway:    defaultGateway,
+		gateway:    protoGateway,
 		appHandler: EchoAppHandler{},
 	}
 
 	// Create the metadata handler chain
 	metadataHandler := MetadataEncapsulationHandler{
 		keyID:   configID,
-		gateway: defaultGateway,
+		gateway: protoGateway,
 	}
 
 	// Configure metrics
@@ -215,7 +215,7 @@ func main() {
 		verbose:               verbose,
 		keyID:                 configID,
 		encapsulationHandlers: handlers,
-		gateway:               defaultGateway,
+		gateway:               protoGateway,
 		debugResponse:         debugResponse,
 		metricsFactory:        metricsFactory,
 	}
