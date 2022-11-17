@@ -149,51 +149,42 @@ func main() {
 
 	// Create the default HTTP handler
 	httpHandler := FilteredHttpRequestHandler{
-		client:             &http.Client{},
-		allowedOrigins:     allowedOrigins,
-		logForbiddenErrors: verbose,
+		client:         &http.Client{},
+		allowedOrigins: allowedOrigins,
 	}
 
 	// Create the default gateway and its request handler chain
-	var gateway ohttp.Gateway
-	var targetHandler EncapsulationHandler
-	requestLabel := os.Getenv(customRequestEncodingType)
-	responseLabel := os.Getenv(customResponseEncodingType)
-	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
-		gateway = ohttp.NewDefaultGateway(config)
-		requestLabel = "message/bhttp request"
-		responseLabel = "message/bhttp response"
-		targetHandler = DefaultEncapsulationHandler{
+	var bhttpGateway = ohttp.NewDefaultGateway(config)
+	var protoGateway = ohttp.NewCustomGateway(config, "message/protohttp request", "message/protohttp response")
+
+	var targetHandler = TryBothEncapsulationHandler{
+		bhttpHandler: DefaultEncapsulationHandler{
 			keyID:   configID,
-			gateway: gateway,
+			gateway: bhttpGateway,
 			appHandler: BinaryHTTPAppHandler{
 				httpHandler: httpHandler,
 			},
-		}
-	} else if requestLabel == "message/protohttp request" && responseLabel == "message/protohttp response" {
-		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
-		targetHandler = DefaultEncapsulationHandler{
+		},
+		protoHandler: DefaultEncapsulationHandler{
 			keyID:   configID,
-			gateway: gateway,
+			gateway: protoGateway,
 			appHandler: ProtoHTTPAppHandler{
 				httpHandler: httpHandler,
 			},
-		}
-	} else {
-		panic("Unsupported application content handler")
+		},
 	}
 
 	// Create the echo handler chain
 	echoHandler := DefaultEncapsulationHandler{
 		keyID:      configID,
-		gateway:    gateway,
+		gateway:    protoGateway,
 		appHandler: EchoAppHandler{},
 	}
 
 	// Create the metadata handler chain
 	metadataHandler := MetadataEncapsulationHandler{
 		keyID:   configID,
-		gateway: gateway,
+		gateway: protoGateway,
 	}
 
 	// Configure metrics
@@ -223,8 +214,8 @@ func main() {
 	target := &gatewayResource{
 		verbose:               verbose,
 		keyID:                 configID,
-		gateway:               gateway,
 		encapsulationHandlers: handlers,
+		gateway:               protoGateway,
 		debugResponse:         debugResponse,
 		metricsFactory:        metricsFactory,
 	}
@@ -237,10 +228,8 @@ func main() {
 	endpoints["Metadata"] = metadataEndpoint
 
 	server := gatewayServer{
-		requestLabel:  requestLabel,
-		responseLabel: responseLabel,
-		endpoints:     endpoints,
-		target:        target,
+		endpoints: endpoints,
+		target:    target,
 	}
 
 	http.HandleFunc(gatewayEndpoint, server.target.gatewayHandler)
