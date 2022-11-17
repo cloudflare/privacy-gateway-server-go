@@ -23,7 +23,7 @@ type gatewayResource struct {
 	metricsFactory        MetricsFactory
 }
 
-type HttpErr struct {
+type HTTPError struct {
 	StatusCode int
 	Message    string
 }
