@@ -67,7 +67,10 @@ func (s *gatewayResource) gatewayHandlerLogic(r *http.Request, metrics Metrics) 
 		return s.httpError(http.StatusBadRequest, fmt.Sprintf("Unknown handler"))
 	}
 	defer r.Body.Close()
-	encryptedMessageBytes, err := ioutil.ReadAll(r.Body)
+        // TODO: Use config to define this at startup time
+        const maxRequestBodyBytes = 2 * 1024 * 1024
+        lr := io.LimitReader(r.Body, maxRequestBodyBytes)
+	encryptedMessageBytes, err := ioutil.ReadAll(lr)
 	if err != nil {
 		metrics.Fire(metricsResultInvalidContent)
 		return s.httpError(http.StatusBadRequest, fmt.Sprintf("Reading request body failed"))
