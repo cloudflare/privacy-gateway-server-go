@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -28,6 +29,10 @@ type HTTPError struct {
 	Message    string
 }
 
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("HTTPError(%d, %s)", e.StatusCode, e.Message)
+}
+
 const (
 	ohttpRequestContentType  = "message/ohttp-req"
 	ohttpResponseContentType = "message/ohttp-res"
@@ -43,15 +48,15 @@ const (
 	metricsResultInvalidContent     = "invalid_content"
 )
 
-func (s *gatewayResource) httpError(status int, debugMessage string) (ohttp.EncapsulatedResponse, HttpErr) {
+func (s *gatewayResource) httpError(status int, debugMessage string) (ohttp.EncapsulatedResponse, HTTPError) {
 	var msg = http.StatusText(status)
 	if s.debugResponse {
 		msg = debugMessage
 	}
-	return ohttp.EncapsulatedResponse{}, HttpErr{status, msg}
+	return ohttp.EncapsulatedResponse{}, HTTPError{status, msg}
 }
 
-func (s *gatewayResource) gatewayHandlerLogic(r *http.Request, metrics Metrics) (ohttp.EncapsulatedResponse, HttpErr) {
+func (s *gatewayResource) gatewayHandlerLogic(r *http.Request, metrics Metrics) (ohttp.EncapsulatedResponse, HTTPError) {
 	if r.Method != http.MethodPost {
 		metrics.Fire(metricsResultInvalidMethod)
 		return s.httpError(http.StatusBadRequest, fmt.Sprintf("Invalid method: %s", r.Method))
@@ -67,9 +72,9 @@ func (s *gatewayResource) gatewayHandlerLogic(r *http.Request, metrics Metrics) 
 		return s.httpError(http.StatusBadRequest, fmt.Sprintf("Unknown handler"))
 	}
 	defer r.Body.Close()
-        // TODO: Use config to define this at startup time
-        const maxRequestBodyBytes = 2 * 1024 * 1024
-        lr := io.LimitReader(r.Body, maxRequestBodyBytes)
+	// TODO: Use config to define this at startup time
+	const maxRequestBodyBytes = 8 * 1024 * 1024
+	lr := io.LimitReader(r.Body, maxRequestBodyBytes)
 	encryptedMessageBytes, err := ioutil.ReadAll(lr)
 	if err != nil {
 		metrics.Fire(metricsResultInvalidContent)
@@ -88,7 +93,7 @@ func (s *gatewayResource) gatewayHandlerLogic(r *http.Request, metrics Metrics) 
 		errorStatusCode := encapsulationErrorToGatewayStatusCode(err)
 		return s.httpError(errorStatusCode, http.StatusText(errorStatusCode))
 	}
-	return encapsulatedResp, HttpErr{http.StatusOK, ""}
+	return encapsulatedResp, HTTPError{http.StatusOK, ""}
 }
 
 func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request) {
