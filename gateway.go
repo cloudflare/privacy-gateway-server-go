@@ -16,8 +16,7 @@ import (
 
 type gatewayResource struct {
 	verbose               bool
-	keyID                 uint8
-	gateway               ohttp.Gateway
+	publicConfig          ohttp.PublicConfig
 	encapsulationHandlers map[string]EncapsulationHandler
 	debugResponse         bool
 	metricsFactory        MetricsFactory
@@ -115,20 +114,12 @@ func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	metrics := s.metricsFactory.Create(metricsEventConfigsRequest)
 
-	config, err := s.gateway.Config(s.keyID)
-	if err != nil {
-		log.Printf("Config unavailable")
-		metrics.Fire(metricsResultConfigsUnavalable)
-		s.httpError(w, http.StatusInternalServerError, "Config unavailable", metrics, r.Method)
-		return
-	}
-
 	// Make expiration time even/random throughout interval 12-36h
 	rand.Seed(time.Now().UnixNano())
 	maxAge := twelveHours + rand.Intn(twentyFourHours)
 	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d, private", maxAge))
 
-	w.Write(config.Marshal())
+	w.Write(s.publicConfig.Marshal())
 
 	metrics.ResponseStatus(r.Method, http.StatusOK)
 }

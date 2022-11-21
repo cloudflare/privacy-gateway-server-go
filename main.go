@@ -31,23 +31,20 @@ const (
 	configEndpoint   = "/ohttp-configs"
 
 	// Environment variables
-	configurationIdEnvironmentVariable = "CONFIGURATION_ID"
-	secretSeedEnvironmentVariable      = "SEED_SECRET_KEY"
-	targetOriginAllowList              = "ALLOWED_TARGET_ORIGINS"
-	customRequestEncodingType          = "CUSTOM_REQUEST_TYPE"
-	customResponseEncodingType         = "CUSTOM_RESPONSE_TYPE"
-	certificateEnvironmentVariable     = "CERT"
-	keyEnvironmentVariable             = "KEY"
-	statsdHostVariable                 = "MONITORING_STATSD_HOST"
-	statsdPortVariable                 = "MONITORING_STATSD_PORT"
-	statsdTimeoutVariable              = "MONITORING_STATSD_TIMEOUT_MS"
-	gatewayDebugEnvironmentVariable    = "GATEWAY_DEBUG"
-	gatewayVerboseEnvironmentVariable  = "VERBOSE"
+	configurationIdEnvironmentVariable       = "CONFIGURATION_ID"
+	secretSeedEnvironmentVariable            = "SEED_SECRET_KEY"
+	targetOriginAllowListEnvironmentVariable = "ALLOWED_TARGET_ORIGINS"
+	trialDecodeFlagEnvironmentVariable       = "TRIAL_DECODE"
+	certificateEnvironmentVariable           = "CERT"
+	keyEnvironmentVariable                   = "KEY"
+	statsdHostVariable                       = "MONITORING_STATSD_HOST"
+	statsdPortVariable                       = "MONITORING_STATSD_PORT"
+	statsdTimeoutVariable                    = "MONITORING_STATSD_TIMEOUT_MS"
+	gatewayDebugEnvironmentVariable          = "GATEWAY_DEBUG"
+	gatewayVerboseEnvironmentVariable        = "VERBOSE"
 )
 
 type gatewayServer struct {
-	requestLabel   string
-	responseLabel  string
 	endpoints      map[string]string
 	target         *gatewayResource
 	metricsFactory MetricsFactory
@@ -59,8 +56,6 @@ func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "----------------\n")
 	fmt.Fprintf(w, "Config endpoint: https://%s%s\n", r.Host, s.endpoints["Config"])
 	fmt.Fprintf(w, "Target endpoint: https://%s%s\n", r.Host, s.endpoints["Target"])
-	fmt.Fprintf(w, "   Request content type:  %s\n", s.requestLabel)
-	fmt.Fprintf(w, "   Response content type: %s\n", s.responseLabel)
 	fmt.Fprintf(w, "Echo endpoint: https://%s%s\n", r.Host, s.endpoints["Echo"])
 	fmt.Fprintf(w, "Metadata endpoint: https://%s%s\n", r.Host, s.endpoints["Metadata"])
 	fmt.Fprint(w, "----------------\n")
@@ -118,7 +113,7 @@ func main() {
 
 	var allowedOrigins map[string]bool
 	var originAllowList string
-	if originAllowList = os.Getenv(targetOriginAllowList); originAllowList != "" {
+	if originAllowList = os.Getenv(targetOriginAllowListEnvironmentVariable); originAllowList != "" {
 		origins := strings.Split(originAllowList, ",")
 		allowedOrigins = make(map[string]bool)
 		for _, origin := range origins {
@@ -155,45 +150,48 @@ func main() {
 	}
 
 	// Create the default gateway and its request handler chain
-	var gateway ohttp.Gateway
+	bhttpGateway := ohttp.NewDefaultGateway(config)
+	protohttpGateway := ohttp.NewCustomGateway(config, "message/protohttp request", "message/protohttp response")
 	var targetHandler EncapsulationHandler
-	requestLabel := os.Getenv(customRequestEncodingType)
-	responseLabel := os.Getenv(customResponseEncodingType)
-	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
-		gateway = ohttp.NewDefaultGateway(config)
-		requestLabel = "message/bhttp request"
-		responseLabel = "message/bhttp response"
+	trialDecode := getBoolEnv(trialDecodeFlagEnvironmentVariable, false)
+	if !trialDecode {
 		targetHandler = DefaultEncapsulationHandler{
 			keyID:   configID,
-			gateway: gateway,
+			gateway: bhttpGateway,
 			appHandler: BinaryHTTPAppHandler{
 				httpHandler: httpHandler,
 			},
 		}
-	} else if requestLabel == "message/protohttp request" && responseLabel == "message/protohttp response" {
-		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
-		targetHandler = DefaultEncapsulationHandler{
-			keyID:   configID,
-			gateway: gateway,
-			appHandler: ProtoHTTPAppHandler{
-				httpHandler: httpHandler,
+	} else {
+		targetHandler = TrialEncapsulationHandler{
+			bhttpHandler: DefaultEncapsulationHandler{
+				keyID:   configID,
+				gateway: bhttpGateway,
+				appHandler: BinaryHTTPAppHandler{
+					httpHandler: httpHandler,
+				},
+			},
+			protohttpHandler: DefaultEncapsulationHandler{
+				keyID:   configID,
+				gateway: protohttpGateway,
+				appHandler: ProtoHTTPAppHandler{
+					httpHandler: httpHandler,
+				},
 			},
 		}
-	} else {
-		panic("Unsupported application content handler")
 	}
 
 	// Create the echo handler chain
 	echoHandler := DefaultEncapsulationHandler{
 		keyID:      configID,
-		gateway:    gateway,
+		gateway:    bhttpGateway,
 		appHandler: EchoAppHandler{},
 	}
 
 	// Create the metadata handler chain
 	metadataHandler := MetadataEncapsulationHandler{
 		keyID:   configID,
-		gateway: gateway,
+		gateway: bhttpGateway,
 	}
 
 	// Configure metrics
@@ -222,8 +220,7 @@ func main() {
 	handlers[metadataEndpoint] = metadataHandler // Metadata handler
 	target := &gatewayResource{
 		verbose:               verbose,
-		keyID:                 configID,
-		gateway:               gateway,
+		publicConfig:          config.Config(),
 		encapsulationHandlers: handlers,
 		debugResponse:         debugResponse,
 		metricsFactory:        metricsFactory,
@@ -237,10 +234,8 @@ func main() {
 	endpoints["Metadata"] = metadataEndpoint
 
 	server := gatewayServer{
-		requestLabel:  requestLabel,
-		responseLabel: responseLabel,
-		endpoints:     endpoints,
-		target:        target,
+		endpoints: endpoints,
+		target:    target,
 	}
 
 	http.HandleFunc(gatewayEndpoint, server.target.gatewayHandler)
