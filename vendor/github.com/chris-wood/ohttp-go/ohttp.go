@@ -194,14 +194,14 @@ type EncapsulatedRequest struct {
 	ct     []byte
 }
 
-// Encapsulated Request {
-// 	Key Identifier (8),
-// 	KEM Identifier (16),
-// 	KDF Identifier (16),
-// 	AEAD Identifier (16),
-// 	Encapsulated KEM Shared Secret (8*Nenc),
-// 	AEAD-Protected Request (..),
-// }
+//	Encapsulated Request {
+//		Key Identifier (8),
+//		KEM Identifier (16),
+//		KDF Identifier (16),
+//		AEAD Identifier (16),
+//		Encapsulated KEM Shared Secret (8*Nenc),
+//		AEAD-Protected Request (..),
+//	}
 func (r EncapsulatedRequest) Marshal() []byte {
 	b := cryptobyte.NewBuilder(nil)
 
@@ -278,10 +278,10 @@ type EncapsulatedResponse struct {
 	raw []byte
 }
 
-// Encapsulated Response {
-// 	Nonce (Nk),
-// 	AEAD-Protected Response (..),
-// }
+//	Encapsulated Response {
+//		Nonce (Nk),
+//		AEAD-Protected Response (..),
+//	}
 func (r EncapsulatedResponse) Marshal() []byte {
 	return r.raw
 }
@@ -417,6 +417,18 @@ func (g Gateway) Config(keyID uint8) (PublicConfig, error) {
 	return PublicConfig{}, fmt.Errorf("Unknown keyID %d", keyID)
 }
 
+func (g Gateway) Client(keyID uint8) (Client, error) {
+	config, err := g.Config(keyID)
+	if err != nil {
+		return Client{}, err
+	}
+	return Client{
+		requestLabel:  g.requestLabel,
+		responseLabel: g.responseLabel,
+		config:        config,
+	}, nil
+}
+
 func NewDefaultGateway(config PrivateConfig) Gateway {
 	return Gateway{
 		requestLabel:  []byte(defaultLabelRequest),
@@ -445,11 +457,6 @@ type DecapsulateRequestContext struct {
 	enc           []byte
 	suite         hpke.CipherSuite
 	context       *hpke.ReceiverContext
-}
-
-func (s Gateway) MatchesKnownKey(req EncapsulatedRequest) bool {
-	_, ok := s.keyMap[req.KeyID]
-	return ok
 }
 
 func (s Gateway) DecapsulateRequest(req EncapsulatedRequest) ([]byte, DecapsulateRequestContext, error) {

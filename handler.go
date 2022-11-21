@@ -6,13 +6,14 @@ package main
 import (
 	"bytes"
 	"errors"
-	"github.com/chris-wood/ohttp-go"
-	"google.golang.org/protobuf/proto"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"strconv"
+
+	"github.com/chris-wood/ohttp-go"
+	"google.golang.org/protobuf/proto"
 )
 
 // Description of the error handling in the specification:
@@ -161,6 +162,23 @@ func (h MetadataEncapsulationHandler) Handle(outerRequest *http.Request, encapsu
 
 	metrics.Fire(metricsResultSuccess)
 	return encapsulatedResponse, nil
+}
+
+// TrialEncapsulationHandler is an encapsulation handler that first tries to decapsulate and
+// decode requests in protobuf-HTTP form and, if that fails, tries again with Binary HTTP.
+type TrialEncapsulationHandler struct {
+	bhttpHandler     EncapsulationHandler
+	protohttpHandler EncapsulationHandler
+}
+
+// Handle attempts to decapsulate the incoming encapsulated request and, if successful, foramts
+// metadata from the request context, and then encapsulates and returns the result.
+func (h TrialEncapsulationHandler) Handle(outerRequest *http.Request, encapsulatedReq ohttp.EncapsulatedRequest, metrics Metrics) (ohttp.EncapsulatedResponse, error) {
+	encapResponse, err := h.protohttpHandler.Handle(outerRequest, encapsulatedReq, metrics)
+	if err != EncapsulationError {
+		return encapResponse, err
+	}
+	return h.bhttpHandler.Handle(outerRequest, encapsulatedReq, metrics)
 }
 
 // AppContentHandler processes application-specific request content and produces response content.

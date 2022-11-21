@@ -26,18 +26,25 @@ var (
 	GATEWAY_DEBUG    = true
 )
 
-func createGateway(t *testing.T) ohttp.Gateway {
-	config, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+func copyFixedSeed() []byte {
+	seed := make([]byte, 32)
+	for i := 0; i < len(seed); i++ {
+		seed[i] = byte(i)
+	}
+	return seed
+}
+
+func mustCreateConfig(t *testing.T) ohttp.PrivateConfig {
+	config, err := ohttp.NewConfigFromSeed(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128, copyFixedSeed())
 	if err != nil {
 		t.Fatal("Failed to create a valid config. Exiting now.")
 	}
-
-	return ohttp.NewDefaultGateway(config)
+	return config
 }
 
 type MockMetrics struct {
 	eventName    string
-	resultLabels map[string]bool
+	resultLabels map[string]int
 }
 
 func (s *MockMetrics) ResponseStatus(prefix string, status int) {
@@ -45,12 +52,14 @@ func (s *MockMetrics) ResponseStatus(prefix string, status int) {
 }
 
 func (s *MockMetrics) Fire(result string) {
-	// This just assertion that we don't call the `Fire` twice for the same result/label
-	_, exists := s.resultLabels[result]
-	if exists {
-		panic("Metrics.Fire called twice for the same result")
+	counter, exists := s.resultLabels[result]
+	if !exists {
+		counter = 0
 	}
-	s.resultLabels[result] = true
+	if counter > 2 {
+		panic("Metrics.Fire called more than twice for TryBothEncapsulationHandler")
+	}
+	s.resultLabels[result] = counter + 1
 }
 
 type MockMetricsFactory struct {
@@ -60,7 +69,7 @@ type MockMetricsFactory struct {
 func (f *MockMetricsFactory) Create(eventName string) Metrics {
 	metrics := &MockMetrics{
 		eventName:    eventName,
-		resultLabels: map[string]bool{},
+		resultLabels: map[string]int{},
 	}
 	f.metrics = append(f.metrics, metrics)
 	return metrics
@@ -91,7 +100,8 @@ func (h ForbiddenCheckHttpRequestHandler) Handle(req *http.Request, metrics Metr
 }
 
 func createMockEchoGatewayServer(t *testing.T) gatewayResource {
-	gateway := createGateway(t)
+	config := mustCreateConfig(t)
+	gateway := ohttp.NewDefaultGateway(config)
 	echoEncapHandler := DefaultEncapsulationHandler{
 		keyID:      FIXED_KEY_ID,
 		gateway:    gateway,
@@ -100,7 +110,7 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 	mockProtoHTTPFilterHandler := DefaultEncapsulationHandler{
 		keyID:   FIXED_KEY_ID,
 		gateway: gateway,
-		appHandler: ProtoHTTPAppHandler{
+		appHandler: BinaryHTTPAppHandler{
 			httpHandler: ForbiddenCheckHttpRequestHandler{
 				FORBIDDEN_TARGET,
 			},
@@ -111,7 +121,49 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 	encapHandlers[echoEndpoint] = echoEncapHandler
 	encapHandlers[gatewayEndpoint] = mockProtoHTTPFilterHandler
 	return gatewayResource{
-		gateway:               gateway,
+		publicConfig:          config.Config(),
+		encapsulationHandlers: encapHandlers,
+		debugResponse:         GATEWAY_DEBUG,
+		metricsFactory:        &MockMetricsFactory{},
+	}
+}
+
+func createMockTrialEchoGatewayServer(t *testing.T) gatewayResource {
+	config := mustCreateConfig(t)
+	gateway := ohttp.NewDefaultGateway(config)
+	protohttpGateway := ohttp.NewCustomGateway(config, "message/protohttp request", "message/protohttp response")
+
+	echoEncapHandler := DefaultEncapsulationHandler{
+		keyID:      FIXED_KEY_ID,
+		gateway:    gateway,
+		appHandler: EchoAppHandler{},
+	}
+	gatewayHandler := TrialEncapsulationHandler{
+		bhttpHandler: DefaultEncapsulationHandler{
+			keyID:   FIXED_KEY_ID,
+			gateway: gateway,
+			appHandler: BinaryHTTPAppHandler{
+				httpHandler: ForbiddenCheckHttpRequestHandler{
+					FORBIDDEN_TARGET,
+				},
+			},
+		},
+		protohttpHandler: DefaultEncapsulationHandler{
+			keyID:   FIXED_KEY_ID,
+			gateway: protohttpGateway,
+			appHandler: ProtoHTTPAppHandler{
+				httpHandler: ForbiddenCheckHttpRequestHandler{
+					FORBIDDEN_TARGET,
+				},
+			},
+		},
+	}
+
+	encapHandlers := make(map[string]EncapsulationHandler)
+	encapHandlers[echoEndpoint] = echoEncapHandler
+	encapHandlers[gatewayEndpoint] = gatewayHandler
+	return gatewayResource{
+		publicConfig:          config.Config(),
 		encapsulationHandlers: encapHandlers,
 		debugResponse:         GATEWAY_DEBUG,
 		metricsFactory:        &MockMetricsFactory{},
@@ -120,11 +172,7 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 
 func TestConfigHandler(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
-	config, err := target.gateway.Config(FIXED_KEY_ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	marshalledConfig := config.Marshal()
+	marshalledConfig := target.publicConfig.Marshal()
 
 	handler := http.HandlerFunc(target.configHandler)
 
@@ -178,7 +226,6 @@ func testBodyContainsError(t *testing.T, resp *http.Response, expectedText strin
 }
 
 func testMetricsContainsResult(t *testing.T, metricsCollector *MockMetricsFactory, event string, result string) {
-
 	for _, metric := range metricsCollector.metrics {
 		if metric.eventName == event {
 			_, exists := metric.resultLabels[result]
@@ -193,321 +240,386 @@ func testMetricsContainsResult(t *testing.T, metricsCollector *MockMetricsFactor
 }
 
 func TestQueryHandlerInvalidContentType(t *testing.T) {
-	target := createMockEchoGatewayServer(t)
-
-	handler := http.HandlerFunc(target.gatewayHandler)
-
-	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Add("Content-Type", "application/not-the-droids-youre-looking-for")
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, request)
-
-	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+	testConfigs := []struct {
+		target gatewayResource
+	}{
+		{target: createMockEchoGatewayServer(t)},
+		{target: createMockTrialEchoGatewayServer(t)},
 	}
 
-	testBodyContainsError(t, rr.Result(), "Invalid content type: application/not-the-droids-youre-looking-for")
-	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultInvalidContentType)
+	for _, test := range testConfigs {
+		target := test.target
+
+		handler := http.HandlerFunc(target.gatewayHandler)
+
+		request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Add("Content-Type", "application/not-the-droids-youre-looking-for")
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, request)
+
+		if status := rr.Result().StatusCode; status != http.StatusBadRequest {
+			t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+		}
+
+		testBodyContainsError(t, rr.Result(), "Invalid content type: application/not-the-droids-youre-looking-for")
+		testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultInvalidContentType)
+	}
 }
 
-func TestGatewayHandler(t *testing.T) {
-	target := createMockEchoGatewayServer(t)
+type ClientFactory interface {
+	CreateClient(t gatewayResource) ohttp.Client
+}
 
-	handler := http.HandlerFunc(target.gatewayHandler)
+type DefaultClientFactory struct {
+}
 
-	config, err := target.gateway.Config(FIXED_KEY_ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := ohttp.NewDefaultClient(config)
+func (d DefaultClientFactory) CreateClient(t gatewayResource) ohttp.Client {
+	return ohttp.NewDefaultClient(t.publicConfig)
+}
 
-	testMessage := []byte{0xCA, 0xFE}
-	req, _, err := client.EncapsulateRequest(testMessage)
+type ProtoHTTPClientFactory struct {
+}
 
-	request, err := http.NewRequest(http.MethodPost, echoEndpoint, bytes.NewReader(req.Marshal()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Add("Content-Type", "message/ohttp-req")
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, request)
-
-	if status := rr.Result().StatusCode; status != http.StatusOK {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
-	}
-	if rr.Result().Header.Get("Content-Type") != "message/ohttp-res" {
-		t.Fatal("Invalid content type response")
-	}
-
-	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultSuccess)
+func (d ProtoHTTPClientFactory) CreateClient(t gatewayResource) ohttp.Client {
+	return ohttp.NewCustomClient(t.publicConfig, "message/protohttp request", "message/protohttp response")
 }
 
 func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
-	target := createMockEchoGatewayServer(t)
-
-	handler := http.HandlerFunc(target.gatewayHandler)
-
-	config, err := target.gateway.Config(FIXED_KEY_ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := ohttp.NewDefaultClient(config)
-
-	testMessage := []byte{0xCA, 0xFE}
-	req, _, err := client.EncapsulateRequest(testMessage)
-
-	request, err := http.NewRequest(http.MethodGet, echoEndpoint, bytes.NewReader(req.Marshal()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Add("Content-Type", "message/ohttp-req")
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, request)
-
-	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+	testConfigs := []struct {
+		clientFactory ClientFactory
+		target        gatewayResource
+	}{
+		{clientFactory: DefaultClientFactory{}, target: createMockEchoGatewayServer(t)},
+		{clientFactory: DefaultClientFactory{}, target: createMockTrialEchoGatewayServer(t)},
 	}
 
-	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultInvalidMethod)
+	for _, test := range testConfigs {
+		target := test.target
+
+		handler := http.HandlerFunc(target.gatewayHandler)
+		client := test.clientFactory.CreateClient(target)
+
+		testMessage := []byte{0xCA, 0xFE}
+		req, _, err := client.EncapsulateRequest(testMessage)
+
+		request, err := http.NewRequest(http.MethodGet, gatewayEndpoint, bytes.NewReader(req.Marshal()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Add("Content-Type", "message/ohttp-req")
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, request)
+
+		if status := rr.Result().StatusCode; status != http.StatusBadRequest {
+			t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+		}
+
+		testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultInvalidMethod)
+	}
 }
 
 func TestGatewayHandlerWithInvalidKey(t *testing.T) {
-	target := createMockEchoGatewayServer(t)
-
-	handler := http.HandlerFunc(target.gatewayHandler)
-
-	// Generate a new config that's different from the target's
-	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
-	if err != nil {
-		t.Fatal("Failed to create a valid config. Exiting now.")
-	}
-	client := ohttp.NewDefaultClient(privateConfig.Config())
-
-	testMessage := []byte{0xCA, 0xFE}
-	req, _, err := client.EncapsulateRequest(testMessage)
-
-	request, err := http.NewRequest(http.MethodPost, echoEndpoint, bytes.NewReader(req.Marshal()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Add("Content-Type", "message/ohttp-req")
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, request)
-
-	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+	testConfigs := []struct {
+		clientFactory ClientFactory
+		target        gatewayResource
+	}{
+		{clientFactory: DefaultClientFactory{}, target: createMockEchoGatewayServer(t)},
+		{clientFactory: DefaultClientFactory{}, target: createMockTrialEchoGatewayServer(t)},
 	}
 
-	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultDecapsulationFailed)
+	for _, test := range testConfigs {
+		target := test.target
+
+		handler := http.HandlerFunc(target.gatewayHandler)
+
+		// Generate a new config that's different from the target's
+		privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+		if err != nil {
+			t.Fatal("Failed to create a valid config.")
+		}
+		client := ohttp.NewDefaultClient(privateConfig.Config())
+
+		testMessage := []byte{0xCA, 0xFE}
+		req, _, err := client.EncapsulateRequest(testMessage)
+
+		request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(req.Marshal()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Add("Content-Type", "message/ohttp-req")
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, request)
+
+		if status := rr.Result().StatusCode; status != http.StatusBadRequest {
+			t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+		}
+
+		testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultDecapsulationFailed)
+	}
 }
 
 func TestGatewayHandlerWithUnknownKey(t *testing.T) {
-	target := createMockEchoGatewayServer(t)
-
-	handler := http.HandlerFunc(target.gatewayHandler)
-
-	// Generate a new config that's different from the target's in the key ID
-	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID^0xFF, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
-	if err != nil {
-		t.Fatal("Failed to create a valid config. Exiting now.")
-	}
-	client := ohttp.NewDefaultClient(privateConfig.Config())
-
-	testMessage := []byte{0xCA, 0xFE}
-	req, _, err := client.EncapsulateRequest(testMessage)
-
-	request, err := http.NewRequest(http.MethodPost, echoEndpoint, bytes.NewReader(req.Marshal()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Add("Content-Type", "message/ohttp-req")
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, request)
-
-	if status := rr.Result().StatusCode; status != http.StatusUnauthorized {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusUnauthorized, status))
+	testConfigs := []struct {
+		clientFactory ClientFactory
+		target        gatewayResource
+	}{
+		{clientFactory: DefaultClientFactory{}, target: createMockEchoGatewayServer(t)},
+		{clientFactory: DefaultClientFactory{}, target: createMockTrialEchoGatewayServer(t)},
 	}
 
-	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultConfigurationMismatch)
+	for _, test := range testConfigs {
+		target := test.target
+
+		handler := http.HandlerFunc(target.gatewayHandler)
+
+		// Generate a new config that's different from the target's in the key ID
+		privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID^0xFF, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+		if err != nil {
+			t.Fatal("Failed to create a valid config.")
+		}
+		client := ohttp.NewDefaultClient(privateConfig.Config())
+
+		testMessage := []byte{0xCA, 0xFE}
+		req, _, err := client.EncapsulateRequest(testMessage)
+
+		request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(req.Marshal()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Add("Content-Type", "message/ohttp-req")
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, request)
+
+		if status := rr.Result().StatusCode; status != http.StatusUnauthorized {
+			t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusUnauthorized, status))
+		}
+
+		testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultConfigurationMismatch)
+	}
 }
 
 func TestGatewayHandlerWithCorruptContent(t *testing.T) {
-	target := createMockEchoGatewayServer(t)
-
-	handler := http.HandlerFunc(target.gatewayHandler)
-
-	config, err := target.gateway.Config(FIXED_KEY_ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := ohttp.NewDefaultClient(config)
-
-	// Corrupt the message
-	testMessage := []byte{0xCA, 0xFE}
-	req, _, err := client.EncapsulateRequest(testMessage)
-	reqEnc := req.Marshal()
-	reqEnc[len(reqEnc)-1] ^= 0xFF
-
-	request, err := http.NewRequest(http.MethodPost, echoEndpoint, bytes.NewReader(reqEnc))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Add("Content-Type", "message/ohttp-req")
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, request)
-
-	if status := rr.Result().StatusCode; status != http.StatusBadRequest {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+	testConfigs := []struct {
+		clientFactory ClientFactory
+		target        gatewayResource
+	}{
+		{clientFactory: DefaultClientFactory{}, target: createMockEchoGatewayServer(t)},
+		{clientFactory: DefaultClientFactory{}, target: createMockTrialEchoGatewayServer(t)},
 	}
 
-	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultDecapsulationFailed)
+	for _, test := range testConfigs {
+		target := test.target
+
+		handler := http.HandlerFunc(target.gatewayHandler)
+		client := test.clientFactory.CreateClient(target)
+
+		// Corrupt the message
+		testMessage := []byte{0xCA, 0xFE}
+		req, _, err := client.EncapsulateRequest(testMessage)
+		reqEnc := req.Marshal()
+		reqEnc[len(reqEnc)-1] ^= 0xFF
+
+		request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Add("Content-Type", "message/ohttp-req")
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, request)
+
+		if status := rr.Result().StatusCode; status != http.StatusBadRequest {
+			t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusBadRequest, status))
+		}
+
+		testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultDecapsulationFailed)
+	}
 }
 
+type TestMessageCodec interface {
+	EncodeRequest(req *http.Request) ([]byte, error)
+	DecodeResponse(resp []byte) (bool, int, error)
+}
+
+type ProtoHTTPMessageCodec struct{}
+
+func (h ProtoHTTPMessageCodec) EncodeRequest(req *http.Request) ([]byte, error) {
+	protoReq, err := requestToProtoHTTP(req)
+	if err != nil {
+		return nil, err
+	}
+	return proto.Marshal(protoReq)
+}
+
+func (h ProtoHTTPMessageCodec) DecodeResponse(binaryResp []byte) (bool, int, error) {
+	protoResp := &Response{}
+	if err := proto.Unmarshal(binaryResp, protoResp); err != nil {
+		return false, 0, err
+	}
+	return true, int(protoResp.StatusCode), nil
+}
 func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
-	target := createMockEchoGatewayServer(t)
-
-	handler := http.HandlerFunc(target.gatewayHandler)
-
-	config, err := target.gateway.Config(FIXED_KEY_ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := ohttp.NewDefaultClient(config)
-
-	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", FORBIDDEN_TARGET, gatewayEndpoint), nil)
-	if err != nil {
-		t.Fatal(err)
+	testConfigs := []struct {
+		codec         TestMessageCodec
+		clientFactory ClientFactory
+		target        gatewayResource
+	}{
+		{
+			codec:         ProtoHTTPMessageCodec{},
+			clientFactory: ProtoHTTPClientFactory{},
+			target:        createMockTrialEchoGatewayServer(t),
+		},
 	}
 
-	binaryRequest, err := requestToProtoHTTP(httpRequest)
-	if err != nil {
-		t.Fatal(err)
+	for _, test := range testConfigs {
+		target := test.target
+
+		handler := http.HandlerFunc(target.gatewayHandler)
+		client := test.clientFactory.CreateClient(target)
+
+		httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", FORBIDDEN_TARGET, gatewayEndpoint), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		encodedRequest, err := test.codec.EncodeRequest(httpRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req, context, err := client.EncapsulateRequest(encodedRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		reqEnc := req.Marshal()
+
+		request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Add("Content-Type", "message/ohttp-req")
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, request)
+
+		if status := rr.Result().StatusCode; status != http.StatusOK {
+			t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+		}
+
+		bodyBytes, err := ioutil.ReadAll(rr.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		encapResp, err := ohttp.UnmarshalEncapsulatedResponse(bodyBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		binaryResp, err := context.DecapsulateResponse(encapResp)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ok, statusCode, err := test.codec.DecodeResponse(binaryResp)
+		if !ok {
+			t.Fatal(err)
+		}
+		if statusCode != http.StatusForbidden {
+			t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusForbidden, statusCode))
+		}
+
+		testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultTargetRequestForbidden)
 	}
-
-	encodedRequest, err := proto.Marshal(binaryRequest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, context, err := client.EncapsulateRequest(encodedRequest)
-	reqEnc := req.Marshal()
-
-	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Add("Content-Type", "message/ohttp-req")
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, request)
-
-	if status := rr.Result().StatusCode; status != http.StatusOK {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
-	}
-
-	bodyBytes, err := ioutil.ReadAll(rr.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	encapResp, err := ohttp.UnmarshalEncapsulatedResponse(bodyBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	binaryResp, err := context.DecapsulateResponse(encapResp)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	resp := &Response{}
-	if err := proto.Unmarshal(binaryResp, resp); err != nil {
-		t.Fatal(err)
-	}
-
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusForbidden, resp.StatusCode))
-	}
-
-	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultTargetRequestForbidden)
 }
 
 func TestGatewayHandlerProtoHTTPRequestWithAllowedTarget(t *testing.T) {
-	target := createMockEchoGatewayServer(t)
-
-	handler := http.HandlerFunc(target.gatewayHandler)
-
-	config, err := target.gateway.Config(FIXED_KEY_ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := ohttp.NewDefaultClient(config)
-
-	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", ALLOWED_TARGET, gatewayEndpoint), nil)
-	if err != nil {
-		t.Fatal(err)
+	testConfigs := []struct {
+		codec         TestMessageCodec
+		clientFactory ClientFactory
+		target        gatewayResource
+	}{
+		{
+			codec:         ProtoHTTPMessageCodec{},
+			clientFactory: ProtoHTTPClientFactory{},
+			target:        createMockTrialEchoGatewayServer(t),
+		},
 	}
 
-	binaryRequest, err := requestToProtoHTTP(httpRequest)
-	if err != nil {
-		t.Fatal(err)
+	for _, test := range testConfigs {
+		target := test.target
+
+		handler := http.HandlerFunc(target.gatewayHandler)
+		client := test.clientFactory.CreateClient(target)
+
+		httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", ALLOWED_TARGET, gatewayEndpoint), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		binaryRequest, err := requestToProtoHTTP(httpRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		encodedRequest, err := proto.Marshal(binaryRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, context, err := client.EncapsulateRequest(encodedRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reqEnc := req.Marshal()
+
+		request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Add("Content-Type", "message/ohttp-req")
+
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, request)
+
+		if status := rr.Result().StatusCode; status != http.StatusOK {
+			t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+		}
+
+		if status := rr.Result().StatusCode; status != http.StatusOK {
+			t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+		}
+
+		bodyBytes, err := ioutil.ReadAll(rr.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		encapResp, err := ohttp.UnmarshalEncapsulatedResponse(bodyBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		binaryResp, err := context.DecapsulateResponse(encapResp)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ok, statusCode, err := test.codec.DecodeResponse(binaryResp)
+		if !ok {
+			t.Fatal(err)
+		}
+		if statusCode != http.StatusOK {
+			t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusOK, statusCode))
+		}
+
+		testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultSuccess)
 	}
-
-	encodedRequest, err := proto.Marshal(binaryRequest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, context, err := client.EncapsulateRequest(encodedRequest)
-	reqEnc := req.Marshal()
-
-	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request.Header.Add("Content-Type", "message/ohttp-req")
-
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, request)
-
-	if status := rr.Result().StatusCode; status != http.StatusOK {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
-	}
-
-	if status := rr.Result().StatusCode; status != http.StatusOK {
-		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
-	}
-
-	bodyBytes, err := ioutil.ReadAll(rr.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	encapResp, err := ohttp.UnmarshalEncapsulatedResponse(bodyBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	binaryResp, err := context.DecapsulateResponse(encapResp)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	resp := &Response{}
-	if err := proto.Unmarshal(binaryResp, resp); err != nil {
-		t.Fatal(err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusOK, resp.StatusCode))
-	}
-
-	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultSuccess)
 }
