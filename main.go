@@ -23,14 +23,19 @@ const (
 	defaultSeedLength = 32
 
 	// HTTP constants. Fill in your proxy and target here.
-	defaultPort      = "8080"
-	gatewayEndpoint  = "/gateway"
-	echoEndpoint     = "/gateway-echo"
-	metadataEndpoint = "/gateway-metadata"
-	healthEndpoint   = "/health"
-	configEndpoint   = "/ohttp-configs"
+	defaultPort             = "8080"
+	defaultGatewayEndpoint  = "/gateway"
+	defaultConfigEndpoint   = "/ohttp-configs"
+	defaultEchoEndpoint     = "/gateway-echo"
+	defaultMetadataEndpoint = "/gateway-metadata"
+	defaultHealthEndpoint   = "/health"
 
 	// Environment variables
+	gatewayEndpointEnvVariable         = "GATEWAY_ENDPOINT"
+	configEndpointEnvVariable          = "CONFIG_ENDPOINT"
+	echoEndpointEnvVariable            = "ECHO_ENDPOINT"
+	metadataEndpointEnvVariable        = "METADATA_ENDPOINT"
+	healthEndpointEnvVariable          = "HEALTH_ENDPOINT"
 	configurationIdEnvironmentVariable = "CONFIGURATION_ID"
 	secretSeedEnvironmentVariable      = "SEED_SECRET_KEY"
 	targetOriginAllowList              = "ALLOWED_TARGET_ORIGINS"
@@ -95,6 +100,14 @@ func getBoolEnv(key string, defaultVal bool) bool {
 		return defaultVal
 	}
 	return ret
+}
+
+func getStringEnv(key string, defaultVal string) string {
+	val := os.Getenv(key)
+	if val == "" {
+		return defaultVal
+	}
+	return val
 }
 
 func main() {
@@ -216,6 +229,14 @@ func main() {
 		client:      client,
 	}
 
+	// Load endpoint configuration defaults
+	gatewayEndpoint := getStringEnv(gatewayEndpointEnvVariable, defaultGatewayEndpoint)
+	configEndpoint := getStringEnv(configEndpointEnvVariable, defaultConfigEndpoint)
+	echoEndpoint := getStringEnv(echoEndpointEnvVariable, defaultEchoEndpoint)
+	metadataEndpoint := getStringEnv(metadataEndpointEnvVariable, defaultMetadataEndpoint)
+	healthEndpoint := getStringEnv(healthEndpointEnvVariable, defaultHealthEndpoint)
+
+	// Install configuration endpoints
 	handlers := make(map[string]EncapsulationHandler)
 	handlers[gatewayEndpoint] = targetHandler    // Content-specific handler
 	handlers[echoEndpoint] = echoHandler         // Content-agnostic handler
