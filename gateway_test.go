@@ -108,8 +108,8 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 	}
 
 	encapHandlers := make(map[string]EncapsulationHandler)
-	encapHandlers[echoEndpoint] = echoEncapHandler
-	encapHandlers[gatewayEndpoint] = mockProtoHTTPFilterHandler
+	encapHandlers[defaultEchoEndpoint] = echoEncapHandler
+	encapHandlers[defaultGatewayEndpoint] = mockProtoHTTPFilterHandler
 	return gatewayResource{
 		gateway:               gateway,
 		encapsulationHandlers: encapHandlers,
@@ -128,7 +128,7 @@ func TestConfigHandler(t *testing.T) {
 
 	handler := http.HandlerFunc(target.configHandler)
 
-	request, err := http.NewRequest("GET", configEndpoint, nil)
+	request, err := http.NewRequest("GET", defaultConfigEndpoint, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestQueryHandlerInvalidContentType(t *testing.T) {
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
-	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, nil)
+	request, err := http.NewRequest(http.MethodPost, defaultGatewayEndpoint, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestGatewayHandler(t *testing.T) {
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
 
-	request, err := http.NewRequest(http.MethodPost, echoEndpoint, bytes.NewReader(req.Marshal()))
+	request, err := http.NewRequest(http.MethodPost, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
 
-	request, err := http.NewRequest(http.MethodGet, echoEndpoint, bytes.NewReader(req.Marshal()))
+	request, err := http.NewRequest(http.MethodGet, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestGatewayHandlerWithInvalidKey(t *testing.T) {
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
 
-	request, err := http.NewRequest(http.MethodPost, echoEndpoint, bytes.NewReader(req.Marshal()))
+	request, err := http.NewRequest(http.MethodPost, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestGatewayHandlerWithUnknownKey(t *testing.T) {
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
 
-	request, err := http.NewRequest(http.MethodPost, echoEndpoint, bytes.NewReader(req.Marshal()))
+	request, err := http.NewRequest(http.MethodPost, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestGatewayHandlerWithCorruptContent(t *testing.T) {
 	reqEnc := req.Marshal()
 	reqEnc[len(reqEnc)-1] ^= 0xFF
 
-	request, err := http.NewRequest(http.MethodPost, echoEndpoint, bytes.NewReader(reqEnc))
+	request, err := http.NewRequest(http.MethodPost, defaultEchoEndpoint, bytes.NewReader(reqEnc))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,7 +383,7 @@ func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
 	}
 	client := ohttp.NewDefaultClient(config)
 
-	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", FORBIDDEN_TARGET, gatewayEndpoint), nil)
+	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", FORBIDDEN_TARGET, defaultGatewayEndpoint), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
 	req, context, err := client.EncapsulateRequest(encodedRequest)
 	reqEnc := req.Marshal()
 
-	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
+	request, err := http.NewRequest(http.MethodPost, defaultGatewayEndpoint, bytes.NewReader(reqEnc))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,7 @@ func TestGatewayHandlerProtoHTTPRequestWithAllowedTarget(t *testing.T) {
 	}
 	client := ohttp.NewDefaultClient(config)
 
-	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", ALLOWED_TARGET, gatewayEndpoint), nil)
+	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", ALLOWED_TARGET, defaultGatewayEndpoint), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +468,7 @@ func TestGatewayHandlerProtoHTTPRequestWithAllowedTarget(t *testing.T) {
 	req, context, err := client.EncapsulateRequest(encodedRequest)
 	reqEnc := req.Marshal()
 
-	request, err := http.NewRequest(http.MethodPost, gatewayEndpoint, bytes.NewReader(reqEnc))
+	request, err := http.NewRequest(http.MethodPost, defaultGatewayEndpoint, bytes.NewReader(reqEnc))
 	if err != nil {
 		t.Fatal(err)
 	}
