@@ -3,7 +3,7 @@
 [![GoDoc](https://godoc.org/github.com/cloudflare/circl?status.svg)](https://pkg.go.dev/github.com/chris-wood/ohttp-go?tab=overview)
 [![Go Report Card](https://goreportcard.com/badge/github.com/cloudflare/circl)](https://goreportcard.com/report/github.com/chris-wood/ohttp-go)
 
-This library contains an implementations of [Oblivious HTTP](https://datatracker.ietf.org/doc/draft-thomson-http-oblivious/) and [binary representations of HTTP messages](https://datatracker.ietf.org/doc/draft-thomson-http-binary-message/). 
+This library contains an implementation of [Oblivious HTTP](https://datatracker.ietf.org/doc/draft-thomson-http-oblivious/) and binary representations of HTTP messages ([RFC9292](https://datatracker.ietf.org/doc/html/rfc9292)). Binary HTTP support is limited to known-length messages. Indeterminate-length messages are not currently supported.
 
 ## Security Disclaimer
 
