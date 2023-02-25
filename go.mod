@@ -6,7 +6,6 @@ require (
 	github.com/DataDog/datadog-go/v5 v5.1.1
 	github.com/chris-wood/ohttp-go v0.0.0-20221121160449-511a7a2e4031
 	github.com/cisco/go-hpke v0.0.0-20220110164554-aec202176774
-	github.com/golang/protobuf v1.5.2
 	google.golang.org/protobuf v1.28.1
 )
 
@@ -16,5 +15,5 @@ require (
 	github.com/cisco/go-tls-syntax v0.0.0-20200617162716-46b0cfb76b9b // indirect
 	github.com/cloudflare/circl v1.0.0 // indirect
 	golang.org/x/crypto v0.0.0-20210220033148-5ea612d1eb83 // indirect
-	golang.org/x/sys v0.0.0-20210630005230-0f9fa26af87c // indirect
+	golang.org/x/sys v0.1.0 // indirect
 )
