@@ -106,7 +106,7 @@ func NewConfig(keyID uint8, kemID hpke.KEM, kdfID hpke.KDF, aeadID hpke.AEAD) (P
 	if !kemID.IsValid() || !kdfID.IsValid() || !aeadID.IsValid() {
 		return PrivateConfig{}, fmt.Errorf("invalid ciphersuite")
 	}
-	ikm := make([]byte, kemID.Scheme().PrivateKeySize())
+	ikm := make([]byte, kemID.Scheme().SeedSize())
 	rand.Reader.Read(ikm)
 
 	return NewConfigFromSeed(keyID, kemID, kdfID, aeadID, ikm)
@@ -407,6 +407,7 @@ type Gateway struct {
 	requestLabel  []byte
 	responseLabel []byte
 	// map from IDs to private key(s)
+	keys   []uint8
 	keyMap map[uint8]PrivateConfig
 }
 
@@ -429,23 +430,27 @@ func (g Gateway) Client(keyID uint8) (Client, error) {
 	}, nil
 }
 
-func createConfigMap(configs []PrivateConfig) map[uint8]PrivateConfig {
+func createConfigMap(configs []PrivateConfig) ([]uint8, map[uint8]PrivateConfig) {
 	configMap := make(map[uint8]PrivateConfig)
+	keys := make([]uint8, 0)
 	for _, config := range configs {
 		_, exists := configMap[config.publicConfig.ID]
 		if exists {
 			panic("Duplicate config key IDs")
 		}
 		configMap[config.publicConfig.ID] = config
+		keys = append(keys, config.publicConfig.ID)
 	}
-	return configMap
+	return keys, configMap
 }
 
 func NewDefaultGateway(configs []PrivateConfig) Gateway {
+	keys, keyMap := createConfigMap(configs)
 	return Gateway{
 		requestLabel:  []byte(defaultLabelRequest),
 		responseLabel: []byte(defaultLabelResponse),
-		keyMap:        createConfigMap(configs),
+		keys:          keys,
+		keyMap:        keyMap,
 	}
 }
 
@@ -454,10 +459,12 @@ func NewCustomGateway(configs []PrivateConfig, requestLabel, responseLabel strin
 		panic("Invalid request and response labels")
 	}
 
+	keys, keyMap := createConfigMap(configs)
 	return Gateway{
 		requestLabel:  []byte(requestLabel),
 		responseLabel: []byte(responseLabel),
-		keyMap:        createConfigMap(configs),
+		keys:          keys,
+		keyMap:        keyMap,
 	}
 }
 
@@ -466,6 +473,22 @@ type DecapsulateRequestContext struct {
 	enc           []byte
 	suite         hpke.Suite
 	context       hpke.Opener
+}
+
+func (s Gateway) MatchesConfig(req EncapsulatedRequest) bool {
+	_, ok := s.keyMap[req.KeyID]
+	return ok
+}
+
+func (s Gateway) MarshalConfigs() []byte {
+	b := cryptobyte.NewBuilder(nil)
+
+	for _, id := range s.keys {
+		b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
+			b.AddBytes(s.keyMap[id].publicConfig.Marshal())
+		})
+	}
+	return b.BytesOrPanic()
 }
 
 func (s Gateway) DecapsulateRequest(req EncapsulatedRequest) ([]byte, DecapsulateRequestContext, error) {

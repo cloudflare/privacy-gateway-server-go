@@ -6,13 +6,14 @@ package main
 import (
 	"bytes"
 	"errors"
-	"github.com/chris-wood/ohttp-go"
-	"google.golang.org/protobuf/proto"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"strconv"
+
+	"github.com/chris-wood/ohttp-go"
+	"google.golang.org/protobuf/proto"
 )
 
 // Description of the error handling in the specification:
@@ -90,7 +91,6 @@ type EncapsulationHandler interface {
 // requests, pass them to an AppContentHandler to produce a response for encapsulation, and encapsulates the
 // response.
 type DefaultEncapsulationHandler struct {
-	keyID      uint8
 	gateway    ohttp.Gateway
 	appHandler AppContentHandler
 }
@@ -99,7 +99,7 @@ type DefaultEncapsulationHandler struct {
 // corresponding application payload to the AppContentHandler for producing a response to encapsulate
 // and return.
 func (h DefaultEncapsulationHandler) Handle(outerRequest *http.Request, encapsulatedReq ohttp.EncapsulatedRequest, metrics Metrics) (ohttp.EncapsulatedResponse, error) {
-	if encapsulatedReq.KeyID != h.keyID {
+	if !h.gateway.MatchesConfig(encapsulatedReq) {
 		metrics.Fire(metricsResultConfigurationMismatch)
 		return EncapsulationFail(ConfigMismatchError)
 	}
@@ -128,14 +128,13 @@ func (h DefaultEncapsulationHandler) Handle(outerRequest *http.Request, encapsul
 // requests and return metadata about the encapsulated request context as an encapsulated response. Metadata
 // includes, for example, the list of headers carried on the encapsulated request from the client or relay.
 type MetadataEncapsulationHandler struct {
-	keyID   uint8
 	gateway ohttp.Gateway
 }
 
 // Handle attempts to decapsulate the incoming encapsulated request and, if successful, foramts
 // metadata from the request context, and then encapsulates and returns the result.
 func (h MetadataEncapsulationHandler) Handle(outerRequest *http.Request, encapsulatedReq ohttp.EncapsulatedRequest, metrics Metrics) (ohttp.EncapsulatedResponse, error) {
-	if encapsulatedReq.KeyID != h.keyID {
+	if !h.gateway.MatchesConfig(encapsulatedReq) {
 		metrics.Fire(metricsResultConfigurationMismatch)
 		return EncapsulationFail(ConfigMismatchError)
 	}
