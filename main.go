@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"github.com/chris-wood/ohttp-go"
-	"github.com/cisco/go-hpke"
+	"github.com/cloudflare/circl/hpke"
 )
 
 const (
@@ -161,7 +161,7 @@ func main() {
 	monitoringServiceName := getStringEnv(monitoringServiceNameEnvironmentVariable, defaultMonitoringServiceName)
 
 	configID := uint8(getUintEnv(configurationIdEnvironmentVariable, 0))
-	config, err := ohttp.NewConfigFromSeed(configID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128, seed)
+	config, err := ohttp.NewConfigFromSeed(configID, hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM, seed)
 	if err != nil {
 		log.Fatalf("Failed to create gateway configuration from seed: %s", err)
 	}
@@ -179,7 +179,7 @@ func main() {
 	requestLabel := os.Getenv(customRequestEncodingType)
 	responseLabel := os.Getenv(customResponseEncodingType)
 	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
-		gateway = ohttp.NewDefaultGateway(config)
+		gateway = ohttp.NewDefaultGateway([]ohttp.PrivateConfig{config})
 		requestLabel = "message/bhttp request"
 		responseLabel = "message/bhttp response"
 		targetHandler = DefaultEncapsulationHandler{
@@ -190,7 +190,7 @@ func main() {
 			},
 		}
 	} else if requestLabel == "message/protohttp request" && responseLabel == "message/protohttp response" {
-		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
+		gateway = ohttp.NewCustomGateway([]ohttp.PrivateConfig{config}, requestLabel, responseLabel)
 		targetHandler = DefaultEncapsulationHandler{
 			keyID:   configID,
 			gateway: gateway,

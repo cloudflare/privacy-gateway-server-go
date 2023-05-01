@@ -5,11 +5,14 @@ import (
 	"io"
 
 	"github.com/cloudflare/circl/dh/sidh/internal/common"
+	"github.com/cloudflare/circl/dh/sidh/internal/p434"
 	"github.com/cloudflare/circl/dh/sidh/internal/p503"
 	"github.com/cloudflare/circl/dh/sidh/internal/p751"
 )
 
-// I keep it bool in order to be able to apply logical NOT
+// I keep it bool in order to be able to apply logical NOT.
+//
+// Deprecated: not cryptographically secure.
 type KeyVariant uint
 
 // Base type for public and private key. Used mainly to carry domain
@@ -17,11 +20,13 @@ type KeyVariant uint
 type key struct {
 	// Domain parameters of the algorithm to be used with a key
 	params *common.SidhParams
-	// Flag indicates wether corresponds to 2-, 3-torsion group or SIKE
+	// Flag indicates whether corresponds to 2-, 3-torsion group or SIKE
 	keyVariant KeyVariant
 }
 
 // Defines operations on public key
+//
+// Deprecated: not cryptographically secure.
 type PublicKey struct {
 	key
 	// x-coordinates of P,Q,P-Q in this exact order
@@ -29,6 +34,8 @@ type PublicKey struct {
 }
 
 // Defines operations on private key
+//
+// Deprecated: not cryptographically secure.
 type PrivateKey struct {
 	key
 	// Secret key
@@ -37,16 +44,16 @@ type PrivateKey struct {
 	S []byte
 }
 
-// Id's correspond to bitlength of the prime field characteristic
-// Currently Fp751 is the only one supported by this implementation
+// Identifiers correspond to the bitlength of the prime field characteristic.
 const (
+	Fp434 = common.Fp434
 	Fp503 = common.Fp503
 	Fp751 = common.Fp751
 )
 
 const (
 	// First 2 bits identify SIDH variant third bit indicates
-	// wether key is a SIKE variant (set) or SIDH (not set)
+	// whether key is a SIKE variant (set) or SIDH (not set)
 
 	// 001 - SIDH: corresponds to 2-torsion group
 	KeyVariantSidhA KeyVariant = 1 << 0
@@ -56,13 +63,15 @@ const (
 	KeyVariantSike = 1<<2 | KeyVariantSidhB
 )
 
-// Accessor to key variant
+// Accessor to key variant.
 func (key *key) Variant() KeyVariant {
 	return key.keyVariant
 }
 
 // NewPublicKey initializes public key.
 // Usage of this function guarantees that the object is correctly initialized.
+//
+// Deprecated: not cryptographically secure.
 func NewPublicKey(id uint8, v KeyVariant) *PublicKey {
 	return &PublicKey{key: key{params: common.Params(id), keyVariant: v}}
 }
@@ -79,6 +88,10 @@ func (pub *PublicKey) Import(input []byte) error {
 	common.BytesToFp2(&pub.affine3Pt[1], input[ssSz:2*ssSz], pub.params.Bytelen)
 	common.BytesToFp2(&pub.affine3Pt[2], input[2*ssSz:3*ssSz], pub.params.Bytelen)
 	switch pub.params.ID {
+	case Fp434:
+		p434.ToMontgomery(&pub.affine3Pt[0], &pub.affine3Pt[0])
+		p434.ToMontgomery(&pub.affine3Pt[1], &pub.affine3Pt[1])
+		p434.ToMontgomery(&pub.affine3Pt[2], &pub.affine3Pt[2])
 	case Fp503:
 		p503.ToMontgomery(&pub.affine3Pt[0], &pub.affine3Pt[0])
 		p503.ToMontgomery(&pub.affine3Pt[1], &pub.affine3Pt[1])
@@ -99,6 +112,10 @@ func (pub *PublicKey) Export(out []byte) {
 	var feTmp [3]common.Fp2
 	ssSz := pub.params.SharedSecretSize
 	switch pub.params.ID {
+	case Fp434:
+		p434.FromMontgomery(&feTmp[0], &pub.affine3Pt[0])
+		p434.FromMontgomery(&feTmp[1], &pub.affine3Pt[1])
+		p434.FromMontgomery(&feTmp[2], &pub.affine3Pt[2])
 	case Fp503:
 		p503.FromMontgomery(&feTmp[0], &pub.affine3Pt[0])
 		p503.FromMontgomery(&feTmp[1], &pub.affine3Pt[1])
@@ -115,13 +132,15 @@ func (pub *PublicKey) Export(out []byte) {
 	common.Fp2ToBytes(out[2*ssSz:3*ssSz], &feTmp[2], pub.params.Bytelen)
 }
 
-// Size returns size of the public key in bytes
+// Size returns size of the public key in bytes.
 func (pub *PublicKey) Size() int {
 	return pub.params.PublicKeySize
 }
 
 // NewPrivateKey initializes private key.
 // Usage of this function guarantees that the object is correctly initialized.
+//
+// Deprecated: not cryptographically secure.
 func NewPrivateKey(id uint8, v KeyVariant) *PrivateKey {
 	prv := &PrivateKey{key: key{params: common.Params(id), keyVariant: v}}
 	if (v & KeyVariantSidhA) == KeyVariantSidhA {
@@ -142,7 +161,7 @@ func (prv *PrivateKey) Export(out []byte) {
 	copy(out[len(prv.S):], prv.Scalar)
 }
 
-// Size returns size of the private key in bytes
+// Size returns size of the private key in bytes.
 func (prv *PrivateKey) Size() int {
 	tmp := len(prv.Scalar)
 	if prv.Variant() == KeyVariantSike {
@@ -151,7 +170,7 @@ func (prv *PrivateKey) Size() int {
 	return tmp
 }
 
-// Size returns size of the shared secret
+// Size returns size of the shared secret.
 func (prv *PrivateKey) SharedSecretSize() int {
 	return prv.params.SharedSecretSize
 }
@@ -191,7 +210,7 @@ func (prv *PrivateKey) Generate(rand io.Reader) error {
 	}
 
 	// Private key generation takes advantage of the fact that keyspace for secret
-	// key is (0, 2^x - 1), for some possitivite value of 'x' (see SIKE, 1.3.8).
+	// key is (0, 2^x - 1), for some positive value of 'x' (see SIKE, 1.3.8).
 	// It means that all bytes in the secret key, but the last one, can take any
 	// value between <0x00,0xFF>. Similarly for the last byte, but generation
 	// needs to chop off some bits, to make sure generated value is an element of
@@ -203,7 +222,7 @@ func (prv *PrivateKey) Generate(rand io.Reader) error {
 	prv.Scalar[len(prv.Scalar)-1] &= (1 << (dp.SecretBitLen % 8)) - 1
 	// Make sure scalar is SecretBitLen long. SIKE spec says that key
 	// space starts from 0, but I'm not comfortable with having low
-	// value scalars used for private keys. It is still secrure as per
+	// value scalars used for private keys. It is still secure as per
 	// table 5.1 in [SIKE].
 	prv.Scalar[len(prv.Scalar)-1] |= 1 << ((dp.SecretBitLen % 8) - 1)
 
@@ -212,13 +231,19 @@ func (prv *PrivateKey) Generate(rand io.Reader) error {
 
 // Generates public key.
 func (prv *PrivateKey) GeneratePublicKey(pub *PublicKey) {
-	var isA = (prv.keyVariant & KeyVariantSidhA) == KeyVariantSidhA
+	isA := (prv.keyVariant & KeyVariantSidhA) == KeyVariantSidhA
 
 	if (pub.keyVariant != prv.keyVariant) || (pub.params.ID != prv.params.ID) {
-		panic("sidh: incompatbile public key")
+		panic("sidh: incompatible public key")
 	}
 
 	switch prv.params.ID {
+	case Fp434:
+		if isA {
+			p434.PublicKeyGenA(&pub.affine3Pt, prv.Scalar)
+		} else {
+			p434.PublicKeyGenB(&pub.affine3Pt, prv.Scalar)
+		}
 	case Fp503:
 		if isA {
 			p503.PublicKeyGenA(&pub.affine3Pt, prv.Scalar)
@@ -242,13 +267,19 @@ func (prv *PrivateKey) GeneratePublicKey(pub *PublicKey) {
 //
 // Caller must make sure key SIDH key pair is not used more than once.
 func (prv *PrivateKey) DeriveSecret(ss []byte, pub *PublicKey) {
-	var isA = (prv.keyVariant & KeyVariantSidhA) == KeyVariantSidhA
+	isA := (prv.keyVariant & KeyVariantSidhA) == KeyVariantSidhA
 
 	if (pub.keyVariant == prv.keyVariant) || (pub.params.ID != prv.params.ID) {
-		panic("sidh: public and private are incompatbile")
+		panic("sidh: public and private are incompatible")
 	}
 
 	switch prv.params.ID {
+	case Fp434:
+		if isA {
+			p434.DeriveSecretA(ss, prv.Scalar, &pub.affine3Pt)
+		} else {
+			p434.DeriveSecretB(ss, prv.Scalar, &pub.affine3Pt)
+		}
 	case Fp503:
 		if isA {
 			p503.DeriveSecretA(ss, prv.Scalar, &pub.affine3Pt)

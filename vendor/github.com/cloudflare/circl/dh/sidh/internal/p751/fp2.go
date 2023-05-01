@@ -79,10 +79,10 @@ func mul(dest, lhs, rhs *common.Fp2) {
 	// (b - a)*(c - d) = (b*c + a*d) - a*c - b*d
 	//
 	// so (a*d + b*c) = (b-a)*(c-d) + a*c + b*d.
-	mulP751(&ac, &lhs.A, &rhs.A)       // = a*c*R*R
-	mulP751(&bd, &lhs.B, &rhs.B)       // = b*d*R*R
 	subP751(&bMinA, &lhs.B, &lhs.A)    // = (b-a)*R
 	subP751(&cMinD, &rhs.A, &rhs.B)    // = (c-d)*R
+	mulP751(&ac, &lhs.A, &rhs.A)       // = a*c*R*R
+	mulP751(&bd, &lhs.B, &rhs.B)       // = b*d*R*R
 	mulP751(&adPlusBc, &bMinA, &cMinD) // = (b-a)*(c-d)*R*R
 	adlP751(&adPlusBc, &adPlusBc, &ac) // = ((b-a)*(c-d) + a*c)*R*R
 	adlP751(&adPlusBc, &adPlusBc, &bd) // = ((b-a)*(c-d) + a*c + b*d)*R*R
@@ -147,14 +147,41 @@ func sqr(dest, x *common.Fp2) {
 }
 
 // In case choice == 1, performs following swap in constant time:
-// 	xPx <-> xQx
-//	xPz <-> xQz
+//
+// xPx <-> xQx
+// xPz <-> xQz
+//
 // Otherwise returns xPx, xPz, xQx, xQz unchanged
 func cswap(xPx, xPz, xQx, xQz *common.Fp2, choice uint8) {
 	cswapP751(&xPx.A, &xQx.A, choice)
 	cswapP751(&xPx.B, &xQx.B, choice)
 	cswapP751(&xPz.A, &xQz.A, choice)
 	cswapP751(&xPz.B, &xQz.B, choice)
+}
+
+// In case choice == 1, performs following moves in constant time:
+//
+// xPx <- xQx
+// xPz <- xQz
+//
+// Otherwise returns xPx, xPz, xQx, xQz unchanged
+func cmov(xPx, xPz, xQx, xQz *common.Fp2, choice uint8) {
+	cmovP751(&xPx.A, &xQx.A, choice)
+	cmovP751(&xPx.B, &xQx.B, choice)
+	cmovP751(&xPz.A, &xQz.A, choice)
+	cmovP751(&xPz.B, &xQz.B, choice)
+}
+
+func isZero(x *common.Fp2) uint8 {
+	r64 := uint64(0)
+	for i := 0; i < FpWords; i++ {
+		r64 |= x.A[i] | x.B[i]
+	}
+	r := uint8(0)
+	for i := uint64(0); i < 64; i++ {
+		r |= uint8((r64 >> i) & 0x1)
+	}
+	return 1 - r
 }
 
 // Converts in.A and in.B to Montgomery domain and stores

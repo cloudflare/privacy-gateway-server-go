@@ -194,25 +194,37 @@ func UnmarshalBinaryRequest(data []byte) (*http.Request, error) {
 		return nil, err
 	}
 
-	// Content
+	// Content and trailers
+	trailerFields := new(fieldList)
 	content, err := readVarintSlice(b)
 	if err != nil {
 		return nil, err
 	}
-
-	// Trailer fields
-	trailerFields := new(fieldList)
-	encodedFieldData, err = readVarintSlice(b)
-	if err != nil {
-		return nil, err
-	}
-	err = trailerFields.Unmarshal(bytes.NewBuffer(encodedFieldData))
-	if err != nil {
-		return nil, err
-	}
-	for _, field := range trailerFields.fields {
-		if isProhibitedField(field.name) {
-			return nil, errProhibitedField
+	if len(content) == 0 {
+		// Content was truncated, so the trailers MUST also be truncated
+		trailers, err := readVarintSlice(b)
+		if err != nil {
+			return nil, err
+		}
+		if len(trailers) != 0 {
+			return nil, fmt.Errorf("Improperly truncated request")
+		}
+	} else {
+		// Content field was not truncated, so now check for trailers
+		encodedFieldData, err = readVarintSlice(b)
+		if err != nil {
+			return nil, err
+		}
+		if len(encodedFieldData) > 0 {
+			err = trailerFields.Unmarshal(bytes.NewBuffer(encodedFieldData))
+			if err != nil {
+				return nil, err
+			}
+			for _, field := range trailerFields.fields {
+				if isProhibitedField(field.name) {
+					return nil, errProhibitedField
+				}
+			}
 		}
 	}
 
@@ -556,7 +568,7 @@ func UnmarshalBinaryResponse(data []byte) (*http.Response, error) {
 	// Trailer
 	trailerFields := new(fieldList)
 	encodedFieldData, err = readVarintSlice(b)
-	if err != nil {
+	if err != nil && err != io.EOF {
 		return nil, err
 	}
 	err = trailerFields.Unmarshal(bytes.NewBuffer(encodedFieldData))

@@ -6,7 +6,8 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/cisco/go-hpke"
+	"github.com/cloudflare/circl/hpke"
+	"github.com/cloudflare/circl/kem"
 
 	"golang.org/x/crypto/cryptobyte"
 )
@@ -19,13 +20,13 @@ var (
 )
 
 type ConfigCipherSuite struct {
-	KDFID  hpke.KDFID
-	AEADID hpke.AEADID
+	KDFID  hpke.KDF
+	AEADID hpke.AEAD
 }
 
 type PublicConfig struct {
 	ID             uint8
-	KEMID          hpke.KEMID
+	KEMID          hpke.KEM
 	Suites         []ConfigCipherSuite
 	PublicKeyBytes []byte
 }
@@ -56,58 +57,56 @@ func (c PublicConfig) IsEqual(o PublicConfig) bool {
 }
 
 type PrivateConfig struct {
-	seed   []byte
-	config PublicConfig
-	sk     hpke.KEMPrivateKey
-	pk     hpke.KEMPublicKey
+	seed         []byte
+	publicConfig PublicConfig
+	sk           kem.PrivateKey
+	pk           kem.PublicKey
 }
 
 func (c PrivateConfig) Config() PublicConfig {
-	return c.config
+	return c.publicConfig
 }
 
-func (c PrivateConfig) PrivateKey() hpke.KEMPrivateKey {
+func (c PrivateConfig) PrivateKey() kem.PrivateKey {
 	return c.sk
 }
 
-func NewConfigFromSeed(keyID uint8, kemID hpke.KEMID, kdfID hpke.KDFID, aeadID hpke.AEADID, seed []byte) (PrivateConfig, error) {
-	suite, err := hpke.AssembleCipherSuite(kemID, kdfID, aeadID)
-	if err != nil {
-		return PrivateConfig{}, err
+func NewConfigFromSeed(keyID uint8, kemID hpke.KEM, kdfID hpke.KDF, aeadID hpke.AEAD, seed []byte) (PrivateConfig, error) {
+	if !kemID.IsValid() || !kdfID.IsValid() || !aeadID.IsValid() {
+		return PrivateConfig{}, fmt.Errorf("invalid ciphersuite")
 	}
 
-	sk, pk, err := suite.KEM.DeriveKeyPair(seed)
-	if err != nil {
-		return PrivateConfig{}, err
-	}
-
+	pk, sk := kemID.Scheme().DeriveKeyPair(seed)
 	cs := ConfigCipherSuite{
 		KDFID:  kdfID,
 		AEADID: aeadID,
+	}
+
+	pkEnc, err := pk.MarshalBinary()
+	if err != nil {
+		return PrivateConfig{}, err
 	}
 
 	publicConfig := PublicConfig{
 		ID:             keyID,
 		KEMID:          kemID,
 		Suites:         []ConfigCipherSuite{cs},
-		PublicKeyBytes: suite.KEM.SerializePublicKey(pk),
+		PublicKeyBytes: pkEnc,
 	}
 
 	return PrivateConfig{
-		seed:   seed,
-		config: publicConfig,
-		sk:     sk,
-		pk:     pk,
+		seed:         seed,
+		publicConfig: publicConfig,
+		sk:           sk,
+		pk:           pk,
 	}, nil
 }
 
-func NewConfig(keyID uint8, kemID hpke.KEMID, kdfID hpke.KDFID, aeadID hpke.AEADID) (PrivateConfig, error) {
-	suite, err := hpke.AssembleCipherSuite(kemID, kdfID, aeadID)
-	if err != nil {
-		return PrivateConfig{}, err
+func NewConfig(keyID uint8, kemID hpke.KEM, kdfID hpke.KDF, aeadID hpke.AEAD) (PrivateConfig, error) {
+	if !kemID.IsValid() || !kdfID.IsValid() || !aeadID.IsValid() {
+		return PrivateConfig{}, fmt.Errorf("invalid ciphersuite")
 	}
-
-	ikm := make([]byte, suite.KEM.PrivateKeySize())
+	ikm := make([]byte, kemID.Scheme().PrivateKeySize())
 	rand.Reader.Read(ikm)
 
 	return NewConfigFromSeed(keyID, kemID, kdfID, aeadID, ikm)
@@ -136,23 +135,22 @@ func UnmarshalPublicConfig(data []byte) (PublicConfig, error) {
 	var kemID uint16
 	if !s.ReadUint8(&id) ||
 		!s.ReadUint16(&kemID) {
-		return PublicConfig{}, fmt.Errorf("Invalid config")
+		return PublicConfig{}, fmt.Errorf("invalid config")
 	}
 
-	kem := hpke.KEMID(kemID)
-	suite, err := hpke.AssembleCipherSuite(kem, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
-	if err != nil {
-		return PublicConfig{}, fmt.Errorf("Invalid config")
+	kem := hpke.KEM(kemID)
+	if !kem.IsValid() {
+		return PublicConfig{}, fmt.Errorf("invalid KEM")
 	}
 
-	publicKeyBytes := make([]byte, suite.KEM.PublicKeySize())
+	publicKeyBytes := make([]byte, kem.Scheme().PublicKeySize())
 	if !s.ReadBytes(&publicKeyBytes, len(publicKeyBytes)) {
-		return PublicConfig{}, fmt.Errorf("Invalid config")
+		return PublicConfig{}, fmt.Errorf("invalid config")
 	}
 
 	var cipherSuites cryptobyte.String
 	if !s.ReadUint16LengthPrefixed(&cipherSuites) {
-		return PublicConfig{}, fmt.Errorf("Invalid config")
+		return PublicConfig{}, fmt.Errorf("invalid config")
 	}
 	suites := []ConfigCipherSuite{}
 	for !cipherSuites.Empty() {
@@ -160,15 +158,17 @@ func UnmarshalPublicConfig(data []byte) (PublicConfig, error) {
 		var aeadID uint16
 		if !cipherSuites.ReadUint16(&kdfID) ||
 			!cipherSuites.ReadUint16(&aeadID) {
-			return PublicConfig{}, fmt.Errorf("Invalid config")
+			return PublicConfig{}, fmt.Errorf("invalid config")
 		}
 
 		// Sanity check validity of the KDF and AEAD values
-		kdf := hpke.KDFID(kdfID)
-		aead := hpke.AEADID(aeadID)
-		_, err := hpke.AssembleCipherSuite(kem, kdf, aead)
-		if err != nil {
-			return PublicConfig{}, fmt.Errorf("Invalid config")
+		kdf := hpke.KDF(kdfID)
+		if !kdf.IsValid() {
+			return PublicConfig{}, fmt.Errorf("invalid KDF")
+		}
+		aead := hpke.AEAD(aeadID)
+		if !aead.IsValid() {
+			return PublicConfig{}, fmt.Errorf("invalid AEAD")
 		}
 
 		suites = append(suites, ConfigCipherSuite{
@@ -187,9 +187,9 @@ func UnmarshalPublicConfig(data []byte) (PublicConfig, error) {
 
 type EncapsulatedRequest struct {
 	KeyID  uint8
-	kemID  hpke.KEMID
-	kdfID  hpke.KDFID
-	aeadID hpke.AEADID
+	kemID  hpke.KEM
+	kdfID  hpke.KDF
+	aeadID hpke.AEAD
 	enc    []byte
 	ct     []byte
 }
@@ -228,28 +228,23 @@ func UnmarshalEncapsulatedRequest(enc []byte) (EncapsulatedRequest, error) {
 	if err != nil {
 		return EncapsulatedRequest{}, err
 	}
-	kemID := hpke.KEMID(binary.BigEndian.Uint16(kemIDBuffer))
+	kemID := hpke.KEM(binary.BigEndian.Uint16(kemIDBuffer))
 
 	kdfIDBuffer := make([]byte, 2)
 	_, err = b.Read(kdfIDBuffer)
 	if err != nil {
 		return EncapsulatedRequest{}, err
 	}
-	kdfID := hpke.KDFID(binary.BigEndian.Uint16(kdfIDBuffer))
+	kdfID := hpke.KDF(binary.BigEndian.Uint16(kdfIDBuffer))
 
 	aeadIDBuffer := make([]byte, 2)
 	_, err = b.Read(aeadIDBuffer)
 	if err != nil {
 		return EncapsulatedRequest{}, err
 	}
-	aeadID := hpke.AEADID(binary.BigEndian.Uint16(aeadIDBuffer))
+	aeadID := hpke.AEAD(binary.BigEndian.Uint16(aeadIDBuffer))
 
-	suite, err := hpke.AssembleCipherSuite(kemID, kdfID, aeadID)
-	if err != nil {
-		return EncapsulatedRequest{}, err
-	}
-
-	key := make([]byte, suite.KEM.PublicKeySize())
+	key := make([]byte, kemID.Scheme().PublicKeySize())
 	_, err = b.Read(key)
 	if err != nil {
 		return EncapsulatedRequest{}, err
@@ -270,8 +265,8 @@ func UnmarshalEncapsulatedRequest(enc []byte) (EncapsulatedRequest, error) {
 type EncapsulatedRequestContext struct {
 	responseLabel []byte
 	enc           []byte
-	suite         hpke.CipherSuite
-	context       *hpke.SenderContext
+	suite         hpke.Suite
+	context       hpke.Sealer
 }
 
 type EncapsulatedResponse struct {
@@ -299,7 +294,7 @@ type Client struct {
 	requestLabel  []byte
 	responseLabel []byte
 	config        PublicConfig
-	skE           hpke.KEMPrivateKey
+	skE           kem.PrivateKey
 }
 
 func NewDefaultClient(config PublicConfig) Client {
@@ -322,13 +317,9 @@ func (c Client) EncapsulateRequest(request []byte) (EncapsulatedRequest, Encapsu
 	kemID := c.config.KEMID
 	kdfID := c.config.Suites[0].KDFID
 	aeadID := c.config.Suites[0].AEADID
+	suite := hpke.NewSuite(kemID, kdfID, aeadID)
 
-	suite, err := hpke.AssembleCipherSuite(c.config.KEMID, kdfID, aeadID)
-	if err != nil {
-		return EncapsulatedRequest{}, EncapsulatedRequestContext{}, err
-	}
-
-	pkR, err := suite.KEM.DeserializePublicKey(c.config.PublicKeyBytes)
+	pkR, err := kemID.Scheme().UnmarshalBinaryPublicKey(c.config.PublicKeyBytes)
 	if err != nil {
 		return EncapsulatedRequest{}, EncapsulatedRequestContext{}, err
 	}
@@ -348,12 +339,19 @@ func (c Client) EncapsulateRequest(request []byte) (EncapsulatedRequest, Encapsu
 	binary.BigEndian.PutUint16(buffer, uint16(aeadID))
 	info = append(info, buffer...)
 
-	enc, context, err := hpke.SetupBaseS(suite, rand.Reader, pkR, info)
+	sender, err := suite.NewSender(pkR, info)
+	if err != nil {
+		return EncapsulatedRequest{}, EncapsulatedRequestContext{}, err
+	}
+	enc, context, err := sender.Setup(rand.Reader)
 	if err != nil {
 		return EncapsulatedRequest{}, EncapsulatedRequestContext{}, err
 	}
 
-	ct := context.Seal(nil, request)
+	ct, err := context.Seal(request, nil)
+	if err != nil {
+		return EncapsulatedRequest{}, EncapsulatedRequestContext{}, err
+	}
 
 	return EncapsulatedRequest{
 			KeyID:  c.config.ID,
@@ -372,10 +370,12 @@ func (c Client) EncapsulateRequest(request []byte) (EncapsulatedRequest, Encapsu
 
 func (c EncapsulatedRequestContext) DecapsulateResponse(response EncapsulatedResponse) ([]byte, error) {
 	// secret = context.Export("message/bhttp response", Nk)
-	secret := c.context.Export(c.responseLabel, c.suite.AEAD.KeySize())
+	_, KDF, AEAD := c.suite.Params()
+
+	secret := c.context.Export(c.responseLabel, AEAD.KeySize())
 
 	// response_nonce = random(max(Nn, Nk)), taken from the encapsualted response
-	responseNonceLen := max(c.suite.AEAD.KeySize(), c.suite.AEAD.NonceSize())
+	responseNonceLen := max(int(AEAD.KeySize()), 12)
 	responseNonce := make([]byte, responseNonceLen)
 	_, err := rand.Read(responseNonce)
 	if err != nil {
@@ -386,21 +386,21 @@ func (c EncapsulatedRequestContext) DecapsulateResponse(response EncapsulatedRes
 	salt := append(c.enc, response.raw[:responseNonceLen]...)
 
 	// prk = Extract(salt, secret)
-	prk := c.suite.KDF.Extract(salt, secret)
+	prk := KDF.Extract(secret, salt)
 
 	// aead_key = Expand(prk, "key", Nk)
-	key := c.suite.KDF.Expand(prk, []byte(labelResponseKey), c.suite.AEAD.KeySize())
+	key := KDF.Expand(prk, []byte(labelResponseKey), AEAD.KeySize())
 
 	// aead_nonce = Expand(prk, "nonce", Nn)
-	nonce := c.suite.KDF.Expand(prk, []byte(labelResponseNonce), c.suite.AEAD.NonceSize())
+	nonce := KDF.Expand(prk, []byte(labelResponseNonce), 12)
 
-	cipher, err := c.suite.AEAD.New(key)
+	cipher, err := AEAD.New(key)
 	if err != nil {
 		return nil, err
 	}
 
 	// reponse, error = Open(aead_key, aead_nonce, "", ct)
-	return cipher.Open(nil, nonce, response.raw[c.suite.AEAD.KeySize():], nil)
+	return cipher.Open(nil, nonce, response.raw[AEAD.KeySize():], nil)
 }
 
 type Gateway struct {
@@ -414,7 +414,7 @@ func (g Gateway) Config(keyID uint8) (PublicConfig, error) {
 	if config, ok := g.keyMap[keyID]; ok {
 		return config.Config(), nil
 	}
-	return PublicConfig{}, fmt.Errorf("Unknown keyID %d", keyID)
+	return PublicConfig{}, fmt.Errorf("unknown keyID %d", keyID)
 }
 
 func (g Gateway) Client(keyID uint8) (Client, error) {
@@ -429,46 +429,55 @@ func (g Gateway) Client(keyID uint8) (Client, error) {
 	}, nil
 }
 
-func NewDefaultGateway(config PrivateConfig) Gateway {
+func createConfigMap(configs []PrivateConfig) map[uint8]PrivateConfig {
+	configMap := make(map[uint8]PrivateConfig)
+	for _, config := range configs {
+		_, exists := configMap[config.publicConfig.ID]
+		if exists {
+			panic("Duplicate config key IDs")
+		}
+		configMap[config.publicConfig.ID] = config
+	}
+	return configMap
+}
+
+func NewDefaultGateway(configs []PrivateConfig) Gateway {
 	return Gateway{
 		requestLabel:  []byte(defaultLabelRequest),
 		responseLabel: []byte(defaultLabelResponse),
-		keyMap: map[uint8]PrivateConfig{
-			config.config.ID: config,
-		},
+		keyMap:        createConfigMap(configs),
 	}
 }
 
-func NewCustomGateway(config PrivateConfig, requestLabel, responseLabel string) Gateway {
+func NewCustomGateway(configs []PrivateConfig, requestLabel, responseLabel string) Gateway {
 	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
 		panic("Invalid request and response labels")
 	}
+
 	return Gateway{
 		requestLabel:  []byte(requestLabel),
 		responseLabel: []byte(responseLabel),
-		keyMap: map[uint8]PrivateConfig{
-			config.config.ID: config,
-		},
+		keyMap:        createConfigMap(configs),
 	}
 }
 
 type DecapsulateRequestContext struct {
 	responseLabel []byte
 	enc           []byte
-	suite         hpke.CipherSuite
-	context       *hpke.ReceiverContext
+	suite         hpke.Suite
+	context       hpke.Opener
 }
 
 func (s Gateway) DecapsulateRequest(req EncapsulatedRequest) ([]byte, DecapsulateRequestContext, error) {
 	config, ok := s.keyMap[req.KeyID]
 	if !ok {
-		return nil, DecapsulateRequestContext{}, fmt.Errorf("Unknown key ID")
+		return nil, DecapsulateRequestContext{}, fmt.Errorf("unknown key ID")
 	}
 
-	suite, err := hpke.AssembleCipherSuite(config.config.KEMID, req.kdfID, req.aeadID)
-	if err != nil {
-		return nil, DecapsulateRequestContext{}, err
+	if !config.publicConfig.KEMID.IsValid() || !req.kdfID.IsValid() || !req.aeadID.IsValid() {
+		return nil, DecapsulateRequestContext{}, fmt.Errorf("invalid ciphersuite")
 	}
+	suite := hpke.NewSuite(config.publicConfig.KEMID, req.kdfID, req.aeadID)
 
 	info := s.requestLabel
 	info = append(info, 0x00)
@@ -481,12 +490,16 @@ func (s Gateway) DecapsulateRequest(req EncapsulatedRequest) ([]byte, Decapsulat
 	binary.BigEndian.PutUint16(buffer, uint16(req.aeadID))
 	info = append(info, buffer...)
 
-	context, err := hpke.SetupBaseR(suite, config.sk, req.enc, info)
+	receiver, err := suite.NewReceiver(config.sk, info)
+	if err != nil {
+		return nil, DecapsulateRequestContext{}, err
+	}
+	context, err := receiver.Setup(req.enc)
 	if err != nil {
 		return nil, DecapsulateRequestContext{}, err
 	}
 
-	raw, err := context.Open(nil, req.ct)
+	raw, err := context.Open(req.ct, nil)
 	if err != nil {
 		return nil, DecapsulateRequestContext{}, err
 	}
@@ -506,24 +519,26 @@ func max(a, b int) int {
 	return b
 }
 
-func encapsulateResponse(context *hpke.ReceiverContext, response, responseNonce []byte, enc []byte, suite hpke.CipherSuite, responseLabel []byte) (EncapsulatedResponse, error) {
+func encapsulateResponse(context hpke.Opener, response, responseNonce []byte, enc []byte, suite hpke.Suite, responseLabel []byte) (EncapsulatedResponse, error) {
+	_, KDF, AEAD := suite.Params()
+
 	// secret = context.Export("message/bhttp response", Nk)
-	secret := context.Export(responseLabel, suite.AEAD.KeySize())
+	secret := context.Export(responseLabel, AEAD.KeySize())
 
 	// salt = concat(enc, response_nonce)
-	salt := append(append(enc, responseNonce...))
+	salt := append(enc, responseNonce...)
 
 	// prk = Extract(salt, secret)
-	prk := suite.KDF.Extract(salt, secret)
+	prk := KDF.Extract(secret, salt)
 
 	// aead_key = Expand(prk, "key", Nk)
-	key := suite.KDF.Expand(prk, []byte(labelResponseKey), suite.AEAD.KeySize())
+	key := KDF.Expand(prk, []byte(labelResponseKey), AEAD.KeySize())
 
 	// aead_nonce = Expand(prk, "nonce", Nn)
-	nonce := suite.KDF.Expand(prk, []byte(labelResponseNonce), suite.AEAD.NonceSize())
+	nonce := KDF.Expand(prk, []byte(labelResponseNonce), 12)
 
 	// ct = Seal(aead_key, aead_nonce, "", response)
-	cipher, err := suite.AEAD.New(key)
+	cipher, err := AEAD.New(key)
 	if err != nil {
 		return EncapsulatedResponse{}, err
 	}
@@ -536,8 +551,10 @@ func encapsulateResponse(context *hpke.ReceiverContext, response, responseNonce 
 }
 
 func (c DecapsulateRequestContext) EncapsulateResponse(response []byte) (EncapsulatedResponse, error) {
+	_, _, AEAD := c.suite.Params()
+
 	// response_nonce = random(max(Nn, Nk))
-	responseNonceLen := max(c.suite.AEAD.KeySize(), c.suite.AEAD.NonceSize())
+	responseNonceLen := max(int(AEAD.KeySize()), 12)
 	responseNonce := make([]byte, responseNonceLen)
 	_, err := rand.Read(responseNonce)
 	if err != nil {

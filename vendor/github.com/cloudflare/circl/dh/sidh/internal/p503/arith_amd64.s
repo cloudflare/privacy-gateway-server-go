@@ -37,7 +37,7 @@
 // uses MULX instruction. Macro smashes value in DX.
 // Input: I0 and I1.
 // Output: O
-// All the other arguments are resgisters, used for storing temporary values
+// All the other arguments are registers, used for storing temporary values
 #define MULS256_MULX(O, I0, I1, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9) \
 	MOVQ    I0, DX          \
 	MULXQ   I1, T1, T0      \   // T0:T1 = A0*B0
@@ -107,7 +107,7 @@
 // uses ADOX, ADCX and MULX instructions. Macro smashes values in AX and DX.
 // Input: I0 and I1.
 // Output: O
-// All the other arguments resgisters are used for storing temporary values
+// All the other arguments registers are used for storing temporary values
 #define MULS256_MULX_ADCX_ADOX(O, I0, I1, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9) \
 							\   // U0[0]
 	MOVQ     0+I0, DX       \   // MULX requires multiplayer in DX
@@ -193,29 +193,41 @@
 #define MULS_128x320(I0, I1, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, add1, add2, adc1, adc2) \
 	\ // Column 0
 	MOVQ    I0, DX              \
-	MULXQ   I1+24(SB), T0, T1   \
-	MULXQ   I1+32(SB), T4, T2   \
+	MOVQ    I1+24(SB), AX       \
+	MULXQ   AX, T0, T1          \
+	MOVQ    I1+32(SB), AX       \
+	MULXQ   AX, T4, T2          \
+	MOVQ    I1+40(SB), AX       \
+	MULXQ   AX, T5, T3          \
 	XORQ    AX, AX              \
-	MULXQ   I1+40(SB), T5, T3   \
 	add1    T4, T1              \
 	adc1    T5, T2              \
-	MULXQ   I1+48(SB), T7, T4   \
+	MOVQ    I1+48(SB), AX       \
+	MULXQ   AX, T7, T4          \
 	adc1    T7, T3              \
-	MULXQ   I1+56(SB), T6, T5   \
+	MOVQ    I1+56(SB), AX       \
+	MULXQ   AX, T6, T5          \
 	adc1    T6, T4              \
+	MOVL    $0, AX              \
 	adc1    AX, T5              \
 	\ // Column 1
 	MOVQ    8+I0, DX            \
-	MULXQ   I1+24(SB), T6, T7   \
+	MOVQ    I1+24(SB), AX       \
+	MULXQ   AX, T6, T7          \
 	add2    T6, T1              \
 	adc2    T7, T2              \
-	MULXQ   I1+32(SB), T8, T6   \
+	MOVQ    I1+32(SB), AX       \
+	MULXQ   AX, T8, T6          \
 	adc2    T6, T3              \
-	MULXQ   I1+40(SB), T7, T9   \
+	MOVQ    I1+40(SB), AX       \
+	MULXQ   AX, T7, T9          \
 	adc2    T9, T4              \
-	MULXQ   I1+48(SB), T9, T6   \
+	MOVQ    I1+48(SB), AX       \
+	MULXQ   AX, T9, T6          \
 	adc2    T6, T5              \
-	MULXQ   I1+56(SB), DX, T6   \
+	MOVQ    I1+56(SB), AX       \
+	MULXQ   AX, DX, T6          \
+	MOVL    $0, AX              \
 	adc2    AX, T6              \
 	\ // Output
 	XORQ    AX, AX              \
@@ -293,7 +305,7 @@
 	MOVQ    R10, (80)(SP)   \
 	MOVQ    R11, (88)(SP)   \
 	\ // BP will be used for schoolbook multiplication below
-	MOVQ    BP, 96(SP)  \
+	MOVQ    BP, 96(SP)  \ // push: BP is Callee-save.
 	\ // (U1+U0)*(V1+V0)
 	MULS((64)(OUT), 0(SP), 32(SP), R8, R9, R10, R11, R12, R13, R14, R15, BX, BP)    \
 	\ // U0 x V0
@@ -301,7 +313,7 @@
 	\ // U1 x V1
 	MULS(0(SP), 32(I0), 32(I1), R8, R9, R10, R11, R12, R13, R14, R15, BX, BP)  \
 	\ // Recover BP
-	MOVQ    96(SP), BP  \
+	MOVQ    96(SP), BP  \ // pop: BP is Callee-save.
 	\ // Final part of schoolbook multiplication; R[8-11] = (U0+U1) x (V0+V1)
 	MOVQ    (64)(SP), R8    \
 	MOVQ    (72)(SP), R9    \
@@ -353,7 +365,7 @@
 
 // Template for calculating the Montgomery reduction algorithm described in
 // section 5.2.3 of https://eprint.iacr.org/2017/1015.pdf. Template must be
-// customized with schoolbook multiplicaton for 128 x 320-bit number.
+// customized with schoolbook multiplication for 128 x 320-bit number.
 // This macro reuses memory of IN value and *changes* it. Smashes registers
 // R[8-15], BX, CX
 // Input:
@@ -361,7 +373,7 @@
 //    * MULS: either MULS_128x320_MULX or MULS_128x320_MULX_ADCX_ADOX
 // Output: OUT 512-bit
 #define REDC(OUT, IN, MULS) \
-	MULS(0(IN), ·P503p1, R8, R9, R10, R11, R12, R13, R14, BX, CX, R15) \
+	MULS(0(IN), ·P503p1, R8, R9, R10, R11, R12, R13, R14, BX, CX, BP) \
 	XORQ    R15, R15        \
 	ADDQ    (24)(IN), R8    \
 	ADCQ    (32)(IN), R9    \
@@ -395,7 +407,7 @@
 	MOVQ    R11, (112)(IN)  \
 	MOVQ    R12, (120)(IN)  \
 	\
-	MULS(16(IN), ·P503p1, R8, R9, R10, R11, R12, R13, R14, BX, CX, R15)    \
+	MULS(16(IN), ·P503p1, R8, R9, R10, R11, R12, R13, R14, BX, CX, BP)    \
 	XORQ    R15, R15        \
 	ADDQ    (40)(IN), R8    \
 	ADCQ    (48)(IN), R9    \
@@ -423,7 +435,7 @@
 	MOVQ    R9, (112)(IN)   \
 	MOVQ    R10, (120)(IN)  \
 	\
-	MULS(32(IN), ·P503p1, R8, R9, R10, R11, R12, R13, R14, BX, CX, R15)    \
+	MULS(32(IN), ·P503p1, R8, R9, R10, R11, R12, R13, R14, BX, CX, BP)    \
 	XORQ    R15, R15        \
 	XORQ    BX, BX          \
 	ADDQ    ( 56)(IN), R8   \
@@ -445,7 +457,7 @@
 	MOVQ    BX,  (120)(IN)  \
 	MOVQ    R9,  (  0)(OUT) \ // Result: OUT[0]
 	\
-	MULS(48(IN), ·P503p1, R8, R9, R10, R11, R12, R13, R14, BX, CX, R15)    \
+	MULS(48(IN), ·P503p1, R8, R9, R10, R11, R12, R13, R14, BX, CX, BP)    \
 	ADDQ    ( 72)(IN), R8   \
 	ADCQ    ( 80)(IN), R9   \
 	ADCQ    ( 88)(IN), R10  \
@@ -543,6 +555,35 @@ TEXT ·cswapP503(SB),NOSPLIT,$0-17
 #endif
 
 	RET
+
+TEXT ·cmovP503(SB),NOSPLIT,$0-17
+
+    MOVQ    x+0(FP), DI
+    MOVQ    y+8(FP), SI
+    MOVB    choice+16(FP), AL   // AL = 0 or 1
+    MOVBLZX AL, AX  // AX = 0 or 1
+    NEGQ    AX          // AX = 0x00..00 or 0xff..ff
+#ifndef CMOV_BLOCK
+#define CMOV_BLOCK(idx)    \
+    MOVQ    (idx*8)(DI), BX \ // BX = x[idx]
+    MOVQ    (idx*8)(SI), DX \ // DX = y[idx]
+    XORQ    BX, DX          \ // DX = y[idx] ^ x[idx]
+    ANDQ    AX, DX          \ // DX = (y[idx] ^ x[idx]) & mask
+    XORQ    DX, BX          \ // BX = (y[idx] ^ x[idx]) & mask) ^ x[idx] = x[idx] or y[idx]
+    MOVQ    BX, (idx*8)(DI)
+#endif
+    CMOV_BLOCK(0)
+    CMOV_BLOCK(1)
+    CMOV_BLOCK(2)
+    CMOV_BLOCK(3)
+    CMOV_BLOCK(4)
+    CMOV_BLOCK(5)
+    CMOV_BLOCK(6)
+    CMOV_BLOCK(7)
+#ifdef CMOV_BLOCK
+#undef CMOV_BLOCK
+#endif
+    RET
 
 TEXT ·addP503(SB),NOSPLIT,$0-24
 
@@ -696,7 +737,7 @@ TEXT ·mulP503(SB), NOSPLIT, $104-24
 	MOVQ    x+8(FP), REG_P1
 	MOVQ    y+16(FP), REG_P2
 
-	// Check wether to use optimized implementation
+	// Check whether to use optimized implementation
 	CMPB    ·HasADXandBMI2(SB), $1
 	JE      mul_with_mulx_adcx_adox
 	CMPB    ·HasBMI2(SB), $1
@@ -1189,11 +1230,11 @@ mul_with_mulx:
 	MUL(CX, REG_P1, REG_P2, MULS256_MULX)
 	RET
 
-TEXT ·rdcP503(SB), $0-16
+TEXT ·rdcP503(SB), $8-16
 	MOVQ    z+0(FP), REG_P2
 	MOVQ    x+8(FP), REG_P1
 
-	// Check wether to use optimized implementation
+	// Check whether to use optimized implementation
 	CMPB    ·HasADXandBMI2(SB), $1
 	JE      redc_with_mulx_adcx_adox
 	CMPB    ·HasBMI2(SB), $1
@@ -1507,13 +1548,17 @@ redc_with_mulx_adcx_adox:
 	// Implementation of the Montgomery reduction for CPUs
 	// supporting two independent carry chain (ADOX/ADCX)
 	// instructions and carry-less MULX multiplier
+	MOVQ BP, 0(SP) // push: BP is Callee-save.
 	REDC(REG_P2, REG_P1, MULS_128x320_MULX_ADCX_ADOX)
+	MOVQ 0(SP), BP // pop: BP is Callee-save.
 	RET
 
 redc_with_mulx:
 	// Implementation of the Montgomery reduction for CPUs
 	// supporting carry-less MULX multiplier.
+	MOVQ BP, 0(SP) // push: BP is Callee-save.
 	REDC(REG_P2, REG_P1, MULS_128x320_MULX)
+	MOVQ 0(SP), BP // pop: BP is Callee-save.
 	RET
 
 TEXT ·adlP503(SB), NOSPLIT, $0-24

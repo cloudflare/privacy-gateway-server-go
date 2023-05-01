@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	"github.com/chris-wood/ohttp-go"
-	"github.com/cisco/go-hpke"
+	"github.com/cloudflare/circl/hpke"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -27,12 +27,12 @@ var (
 )
 
 func createGateway(t *testing.T) ohttp.Gateway {
-	config, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+	config, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM)
 	if err != nil {
 		t.Fatal("Failed to create a valid config. Exiting now.")
 	}
 
-	return ohttp.NewDefaultGateway(config)
+	return ohttp.NewDefaultGateway([]ohttp.PrivateConfig{config})
 }
 
 type MockMetrics struct {
@@ -227,6 +227,9 @@ func TestGatewayHandler(t *testing.T) {
 
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	request, err := http.NewRequest(http.MethodPost, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
 	if err != nil {
@@ -260,6 +263,9 @@ func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
 
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	request, err := http.NewRequest(http.MethodGet, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
 	if err != nil {
@@ -283,7 +289,7 @@ func TestGatewayHandlerWithInvalidKey(t *testing.T) {
 	handler := http.HandlerFunc(target.gatewayHandler)
 
 	// Generate a new config that's different from the target's
-	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM)
 	if err != nil {
 		t.Fatal("Failed to create a valid config. Exiting now.")
 	}
@@ -291,6 +297,9 @@ func TestGatewayHandlerWithInvalidKey(t *testing.T) {
 
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	request, err := http.NewRequest(http.MethodPost, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
 	if err != nil {
@@ -314,7 +323,7 @@ func TestGatewayHandlerWithUnknownKey(t *testing.T) {
 	handler := http.HandlerFunc(target.gatewayHandler)
 
 	// Generate a new config that's different from the target's in the key ID
-	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID^0xFF, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID^0xFF, hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM)
 	if err != nil {
 		t.Fatal("Failed to create a valid config. Exiting now.")
 	}
@@ -322,6 +331,9 @@ func TestGatewayHandlerWithUnknownKey(t *testing.T) {
 
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	request, err := http.NewRequest(http.MethodPost, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
 	if err != nil {
@@ -353,6 +365,10 @@ func TestGatewayHandlerWithCorruptContent(t *testing.T) {
 	// Corrupt the message
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	reqEnc := req.Marshal()
 	reqEnc[len(reqEnc)-1] ^= 0xFF
 
@@ -398,6 +414,10 @@ func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	req, context, err := client.EncapsulateRequest(encodedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	reqEnc := req.Marshal()
 
 	request, err := http.NewRequest(http.MethodPost, defaultGatewayEndpoint, bytes.NewReader(reqEnc))
@@ -466,6 +486,10 @@ func TestGatewayHandlerProtoHTTPRequestWithAllowedTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	req, context, err := client.EncapsulateRequest(encodedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	reqEnc := req.Marshal()
 
 	request, err := http.NewRequest(http.MethodPost, defaultGatewayEndpoint, bytes.NewReader(reqEnc))
