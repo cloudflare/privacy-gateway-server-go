@@ -37,6 +37,7 @@ const (
 	// Environment variables
 	gatewayEndpointEnvVariable               = "GATEWAY_ENDPOINT"
 	configEndpointEnvVariable                = "CONFIG_ENDPOINT"
+	legacyConfigEndpointEnvVariable          = "LEGACY_CONFIG_ENDPOINT"
 	echoEndpointEnvVariable                  = "ECHO_ENDPOINT"
 	metadataEndpointEnvVariable              = "METADATA_ENDPOINT"
 	healthEndpointEnvVariable                = "HEALTH_ENDPOINT"
@@ -246,7 +247,7 @@ func main() {
 	// Load endpoint configuration defaults
 	gatewayEndpoint := getStringEnv(gatewayEndpointEnvVariable, defaultGatewayEndpoint)
 	configEndpoint := getStringEnv(configEndpointEnvVariable, defaultConfigEndpoint)
-	legacyConfigEndpoint := getStringEnv(configEndpointEnvVariable, defaultLegacyConfigEndpoint)
+	legacyConfigEndpoint := getStringEnv(legacyConfigEndpointEnvVariable, defaultLegacyConfigEndpoint)
 	echoEndpoint := getStringEnv(echoEndpointEnvVariable, defaultEchoEndpoint)
 	metadataEndpoint := getStringEnv(metadataEndpointEnvVariable, defaultMetadataEndpoint)
 	healthEndpoint := getStringEnv(healthEndpointEnvVariable, defaultHealthEndpoint)
