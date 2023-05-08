@@ -16,7 +16,7 @@ import (
 
 type gatewayResource struct {
 	verbose               bool
-	keyID                 uint8
+	legacyKeyID           uint8
 	gateway               ohttp.Gateway
 	encapsulationHandlers map[string]EncapsulationHandler
 	debugResponse         bool
@@ -109,13 +109,13 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 	metrics.ResponseStatus(r.Method, http.StatusOK)
 }
 
-func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) {
+func (s *gatewayResource) legacyConfigHandler(w http.ResponseWriter, r *http.Request) {
 	if s.verbose {
 		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
 	}
 	metrics := s.metricsFactory.Create(metricsEventConfigsRequest)
 
-	config, err := s.gateway.Config(s.keyID)
+	config, err := s.gateway.Config(s.legacyKeyID)
 	if err != nil {
 		log.Printf("Config unavailable")
 		metrics.Fire(metricsResultConfigsUnavalable)
@@ -130,5 +130,21 @@ func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) 
 
 	w.Write(config.Marshal())
 
+	metrics.ResponseStatus(r.Method, http.StatusOK)
+}
+
+func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) {
+	if s.verbose {
+		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
+	}
+	metrics := s.metricsFactory.Create(metricsEventConfigsRequest)
+
+	// Make expiration time even/random throughout interval 12-36h
+	rand.Seed(time.Now().UnixNano())
+	maxAge := twelveHours + rand.Intn(twentyFourHours)
+	w.Header().Set("Cache-Control", fmt.Sprintf("max-age=%d, private", maxAge))
+	w.Header().Set("Content-Type", "application/ohttp-keys")
+
+	w.Write(s.gateway.MarshalConfigs())
 	metrics.ResponseStatus(r.Method, http.StatusOK)
 }
