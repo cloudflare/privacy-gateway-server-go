@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	"github.com/chris-wood/ohttp-go"
-	"github.com/cisco/go-hpke"
+	"github.com/cloudflare/circl/hpke"
 )
 
 const (
@@ -23,12 +23,13 @@ const (
 	defaultSeedLength = 32
 
 	// HTTP constants. Fill in your proxy and target here.
-	defaultPort             = "8080"
-	defaultGatewayEndpoint  = "/gateway"
-	defaultConfigEndpoint   = "/ohttp-configs"
-	defaultEchoEndpoint     = "/gateway-echo"
-	defaultMetadataEndpoint = "/gateway-metadata"
-	defaultHealthEndpoint   = "/health"
+	defaultPort                 = "8080"
+	defaultGatewayEndpoint      = "/gateway"
+	defaultConfigEndpoint       = "/ohttp-keys"
+	defaultLegacyConfigEndpoint = "/ohttp-configs"
+	defaultEchoEndpoint         = "/gateway-echo"
+	defaultMetadataEndpoint     = "/gateway-metadata"
+	defaultHealthEndpoint       = "/health"
 
 	// service name to be reported as a label to monitoring subsystem
 	defaultMonitoringServiceName = "ohttp_gateway"
@@ -36,6 +37,7 @@ const (
 	// Environment variables
 	gatewayEndpointEnvVariable               = "GATEWAY_ENDPOINT"
 	configEndpointEnvVariable                = "CONFIG_ENDPOINT"
+	legacyConfigEndpointEnvVariable          = "LEGACY_CONFIG_ENDPOINT"
 	echoEndpointEnvVariable                  = "ECHO_ENDPOINT"
 	metadataEndpointEnvVariable              = "METADATA_ENDPOINT"
 	healthEndpointEnvVariable                = "HEALTH_ENDPOINT"
@@ -67,6 +69,7 @@ func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "OHTTP Gateway\n")
 	fmt.Fprint(w, "----------------\n")
 	fmt.Fprintf(w, "Config endpoint: https://%s%s\n", r.Host, s.endpoints["Config"])
+	fmt.Fprintf(w, "Legacy config endpoint: https://%s%s\n", r.Host, s.endpoints["LegacyConfig"])
 	fmt.Fprintf(w, "Target endpoint: https://%s%s\n", r.Host, s.endpoints["Target"])
 	fmt.Fprintf(w, "   Request content type:  %s\n", s.requestLabel)
 	fmt.Fprintf(w, "   Response content type: %s\n", s.responseLabel)
@@ -161,9 +164,19 @@ func main() {
 	monitoringServiceName := getStringEnv(monitoringServiceNameEnvironmentVariable, defaultMonitoringServiceName)
 
 	configID := uint8(getUintEnv(configurationIdEnvironmentVariable, 0))
-	config, err := ohttp.NewConfigFromSeed(configID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128, seed)
+	config, err := ohttp.NewConfigFromSeed(configID, hpke.KEM_X25519_KYBER768_DRAFT00, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM, seed)
 	if err != nil {
 		log.Fatalf("Failed to create gateway configuration from seed: %s", err)
+	}
+
+	// From the primary configuration ID, create a key ID for the legacy configuration that old
+	// clients will use for obtaining configuration material. This will eventually be removed once all
+	// clients have been updated to support the primary configuration ID.
+	legacyConfigID := uint8((configID - 128) % 255)
+	seed[len(seed)-1] ^= 0xFF
+	legacyConfig, err := ohttp.NewConfigFromSeed(legacyConfigID, hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM, seed)
+	if err != nil {
+		log.Fatalf("Failed to create legacy gateway configuration from seed: %s", err)
 	}
 
 	// Create the default HTTP handler
@@ -179,20 +192,18 @@ func main() {
 	requestLabel := os.Getenv(customRequestEncodingType)
 	responseLabel := os.Getenv(customResponseEncodingType)
 	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
-		gateway = ohttp.NewDefaultGateway(config)
+		gateway = ohttp.NewDefaultGateway([]ohttp.PrivateConfig{config, legacyConfig})
 		requestLabel = "message/bhttp request"
 		responseLabel = "message/bhttp response"
 		targetHandler = DefaultEncapsulationHandler{
-			keyID:   configID,
 			gateway: gateway,
 			appHandler: BinaryHTTPAppHandler{
 				httpHandler: httpHandler,
 			},
 		}
 	} else if requestLabel == "message/protohttp request" && responseLabel == "message/protohttp response" {
-		gateway = ohttp.NewCustomGateway(config, requestLabel, responseLabel)
+		gateway = ohttp.NewCustomGateway([]ohttp.PrivateConfig{config, legacyConfig}, requestLabel, responseLabel)
 		targetHandler = DefaultEncapsulationHandler{
-			keyID:   configID,
 			gateway: gateway,
 			appHandler: ProtoHTTPAppHandler{
 				httpHandler: httpHandler,
@@ -204,14 +215,12 @@ func main() {
 
 	// Create the echo handler chain
 	echoHandler := DefaultEncapsulationHandler{
-		keyID:      configID,
 		gateway:    gateway,
 		appHandler: EchoAppHandler{},
 	}
 
 	// Create the metadata handler chain
 	metadataHandler := MetadataEncapsulationHandler{
-		keyID:   configID,
 		gateway: gateway,
 	}
 
@@ -238,6 +247,7 @@ func main() {
 	// Load endpoint configuration defaults
 	gatewayEndpoint := getStringEnv(gatewayEndpointEnvVariable, defaultGatewayEndpoint)
 	configEndpoint := getStringEnv(configEndpointEnvVariable, defaultConfigEndpoint)
+	legacyConfigEndpoint := getStringEnv(legacyConfigEndpointEnvVariable, defaultLegacyConfigEndpoint)
 	echoEndpoint := getStringEnv(echoEndpointEnvVariable, defaultEchoEndpoint)
 	metadataEndpoint := getStringEnv(metadataEndpointEnvVariable, defaultMetadataEndpoint)
 	healthEndpoint := getStringEnv(healthEndpointEnvVariable, defaultHealthEndpoint)
@@ -249,7 +259,7 @@ func main() {
 	handlers[metadataEndpoint] = metadataHandler // Metadata handler
 	target := &gatewayResource{
 		verbose:               verbose,
-		keyID:                 configID,
+		legacyKeyID:           configID,
 		gateway:               gateway,
 		encapsulationHandlers: handlers,
 		debugResponse:         debugResponse,
@@ -260,6 +270,7 @@ func main() {
 	endpoints["Target"] = gatewayEndpoint
 	endpoints["Health"] = healthEndpoint
 	endpoints["Config"] = configEndpoint
+	endpoints["LegacyConfig"] = legacyConfigEndpoint
 	endpoints["Echo"] = echoEndpoint
 	endpoints["Metadata"] = metadataEndpoint
 
@@ -274,6 +285,7 @@ func main() {
 	http.HandleFunc(echoEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(metadataEndpoint, server.target.gatewayHandler)
 	http.HandleFunc(healthEndpoint, server.healthCheckHandler)
+	http.HandleFunc(legacyConfigEndpoint, target.legacyConfigHandler)
 	http.HandleFunc(configEndpoint, target.configHandler)
 	http.HandleFunc("/", server.indexHandler)
 

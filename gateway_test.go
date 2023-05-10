@@ -15,24 +15,29 @@ import (
 	"testing"
 
 	"github.com/chris-wood/ohttp-go"
-	"github.com/cisco/go-hpke"
+	"github.com/cloudflare/circl/hpke"
 	"google.golang.org/protobuf/proto"
 )
 
 var (
-	FIXED_KEY_ID     = uint8(0x00)
+	LEGACY_KEY_ID    = uint8(0x00)
+	CURRENT_KEY_ID   = uint8(LEGACY_KEY_ID + 1)
 	FORBIDDEN_TARGET = "forbidden.example"
 	ALLOWED_TARGET   = "allowed.example"
 	GATEWAY_DEBUG    = true
 )
 
 func createGateway(t *testing.T) ohttp.Gateway {
-	config, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+	legacyConfig, err := ohttp.NewConfig(LEGACY_KEY_ID, hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM)
+	if err != nil {
+		t.Fatal("Failed to create a valid config. Exiting now.")
+	}
+	config, err := ohttp.NewConfig(CURRENT_KEY_ID, hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM)
 	if err != nil {
 		t.Fatal("Failed to create a valid config. Exiting now.")
 	}
 
-	return ohttp.NewDefaultGateway(config)
+	return ohttp.NewDefaultGateway([]ohttp.PrivateConfig{config, legacyConfig})
 }
 
 type MockMetrics struct {
@@ -93,12 +98,10 @@ func (h ForbiddenCheckHttpRequestHandler) Handle(req *http.Request, metrics Metr
 func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 	gateway := createGateway(t)
 	echoEncapHandler := DefaultEncapsulationHandler{
-		keyID:      FIXED_KEY_ID,
 		gateway:    gateway,
 		appHandler: EchoAppHandler{},
 	}
 	mockProtoHTTPFilterHandler := DefaultEncapsulationHandler{
-		keyID:   FIXED_KEY_ID,
 		gateway: gateway,
 		appHandler: ProtoHTTPAppHandler{
 			httpHandler: ForbiddenCheckHttpRequestHandler{
@@ -118,17 +121,17 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 	}
 }
 
-func TestConfigHandler(t *testing.T) {
+func TestLegacyConfigHandler(t *testing.T) {
 	target := createMockEchoGatewayServer(t)
-	config, err := target.gateway.Config(FIXED_KEY_ID)
+	config, err := target.gateway.Config(LEGACY_KEY_ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	marshalledConfig := config.Marshal()
 
-	handler := http.HandlerFunc(target.configHandler)
+	handler := http.HandlerFunc(target.legacyConfigHandler)
 
-	request, err := http.NewRequest("GET", defaultConfigEndpoint, nil)
+	request, err := http.NewRequest("GET", defaultLegacyConfigEndpoint, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +149,50 @@ func TestConfigHandler(t *testing.T) {
 	}
 
 	if !bytes.Equal(body, marshalledConfig) {
+		t.Fatal("Received invalid config")
+	}
+
+	// checking correct header exists
+	// Cache-Control: max-age=%d, private
+	cctrl := rr.Header().Get("Cache-Control")
+
+	if strings.HasPrefix(cctrl, "max-age=") && strings.HasSuffix(cctrl, ", private") {
+		maxAge := strings.TrimPrefix(strings.TrimSuffix(cctrl, ", private"), "max-age=")
+		age, err := strconv.Atoi(maxAge)
+		if err != nil {
+			t.Fatal("max-age value should be int", err)
+		}
+		if age < twelveHours || age > twelveHours+twentyFourHours {
+			t.Fatal("age should be between 12 and 36 hours")
+		}
+	} else {
+		t.Fatal("Cache-Control format should be 'max-age=86400, private'")
+	}
+}
+
+func TestConfigHandler(t *testing.T) {
+	target := createMockEchoGatewayServer(t)
+	marshalledConfigs := target.gateway.MarshalConfigs()
+
+	handler := http.HandlerFunc(target.configHandler)
+	request, err := http.NewRequest("GET", defaultConfigEndpoint, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Fatal(fmt.Errorf("Failed request with error code: %d", status))
+	}
+
+	body, err := ioutil.ReadAll(rr.Result().Body)
+	if err != nil {
+		t.Fatal("Failed to read body:", err)
+	}
+
+	if !bytes.Equal(body, marshalledConfigs) {
 		t.Fatal("Received invalid config")
 	}
 
@@ -219,7 +266,7 @@ func TestGatewayHandler(t *testing.T) {
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
-	config, err := target.gateway.Config(FIXED_KEY_ID)
+	config, err := target.gateway.Config(CURRENT_KEY_ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +274,9 @@ func TestGatewayHandler(t *testing.T) {
 
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	request, err := http.NewRequest(http.MethodPost, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
 	if err != nil {
@@ -252,7 +302,7 @@ func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
-	config, err := target.gateway.Config(FIXED_KEY_ID)
+	config, err := target.gateway.Config(CURRENT_KEY_ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,6 +310,9 @@ func TestGatewayHandlerWithInvalidMethod(t *testing.T) {
 
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	request, err := http.NewRequest(http.MethodGet, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
 	if err != nil {
@@ -283,7 +336,7 @@ func TestGatewayHandlerWithInvalidKey(t *testing.T) {
 	handler := http.HandlerFunc(target.gatewayHandler)
 
 	// Generate a new config that's different from the target's
-	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+	privateConfig, err := ohttp.NewConfig(CURRENT_KEY_ID, hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM)
 	if err != nil {
 		t.Fatal("Failed to create a valid config. Exiting now.")
 	}
@@ -291,6 +344,9 @@ func TestGatewayHandlerWithInvalidKey(t *testing.T) {
 
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	request, err := http.NewRequest(http.MethodPost, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
 	if err != nil {
@@ -314,7 +370,7 @@ func TestGatewayHandlerWithUnknownKey(t *testing.T) {
 	handler := http.HandlerFunc(target.gatewayHandler)
 
 	// Generate a new config that's different from the target's in the key ID
-	privateConfig, err := ohttp.NewConfig(FIXED_KEY_ID^0xFF, hpke.DHKEM_X25519, hpke.KDF_HKDF_SHA256, hpke.AEAD_AESGCM128)
+	privateConfig, err := ohttp.NewConfig(CURRENT_KEY_ID^0xFF, hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM)
 	if err != nil {
 		t.Fatal("Failed to create a valid config. Exiting now.")
 	}
@@ -322,6 +378,9 @@ func TestGatewayHandlerWithUnknownKey(t *testing.T) {
 
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	request, err := http.NewRequest(http.MethodPost, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
 	if err != nil {
@@ -344,7 +403,7 @@ func TestGatewayHandlerWithCorruptContent(t *testing.T) {
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
-	config, err := target.gateway.Config(FIXED_KEY_ID)
+	config, err := target.gateway.Config(CURRENT_KEY_ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,6 +412,10 @@ func TestGatewayHandlerWithCorruptContent(t *testing.T) {
 	// Corrupt the message
 	testMessage := []byte{0xCA, 0xFE}
 	req, _, err := client.EncapsulateRequest(testMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	reqEnc := req.Marshal()
 	reqEnc[len(reqEnc)-1] ^= 0xFF
 
@@ -377,7 +440,7 @@ func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
-	config, err := target.gateway.Config(FIXED_KEY_ID)
+	config, err := target.gateway.Config(CURRENT_KEY_ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,6 +461,10 @@ func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	req, context, err := client.EncapsulateRequest(encodedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	reqEnc := req.Marshal()
 
 	request, err := http.NewRequest(http.MethodPost, defaultGatewayEndpoint, bytes.NewReader(reqEnc))
@@ -445,7 +512,7 @@ func TestGatewayHandlerProtoHTTPRequestWithAllowedTarget(t *testing.T) {
 
 	handler := http.HandlerFunc(target.gatewayHandler)
 
-	config, err := target.gateway.Config(FIXED_KEY_ID)
+	config, err := target.gateway.Config(CURRENT_KEY_ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,6 +533,10 @@ func TestGatewayHandlerProtoHTTPRequestWithAllowedTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	req, context, err := client.EncapsulateRequest(encodedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	reqEnc := req.Marshal()
 
 	request, err := http.NewRequest(http.MethodPost, defaultGatewayEndpoint, bytes.NewReader(reqEnc))
