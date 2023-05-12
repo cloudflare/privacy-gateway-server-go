@@ -5,8 +5,9 @@ github.com/Microsoft/go-winio v0.5.0/go.mod h1:JPGBdM1cNvN/6ISo+n8V5iA4v8pBzdOpz
 github.com/bwesterb/go-ristretto v1.2.3/go.mod h1:fUIoIZaG73pV5biE2Blr2xEzDoMj7NFEuV9ekS419A0=
 github.com/chris-wood/ohttp-go v0.0.0-20230502102522-b8ae3b520d55 h1:N0632r12Q7wnmhppSt07MlEyWoYzBgDaPRhJnmnLHdQ=
 github.com/chris-wood/ohttp-go v0.0.0-20230502102522-b8ae3b520d55/go.mod h1:P/sVWl8F9KHJ1esPj/g1A5h8vfA3Ps9n6JOMNf6TszU=
-github.com/cloudflare/circl v1.3.3-0.20230418220640-795540340d5c h1:Do0EMfGqaC15SLvTqc8NlBB4mOgEC5xDIH5QJZB8VKg=
 github.com/cloudflare/circl v1.3.3-0.20230418220640-795540340d5c/go.mod h1:5XYMA4rFBvNIrhs50XuiBJ15vF2pZn4nnUKZrLbUZFA=
+github.com/cloudflare/circl v1.3.3 h1:fE/Qz0QdIGqeWfnwq0RE0R7MI51s0M2E4Ga9kq5AEMs=
+github.com/cloudflare/circl v1.3.3/go.mod h1:5XYMA4rFBvNIrhs50XuiBJ15vF2pZn4nnUKZrLbUZFA=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
