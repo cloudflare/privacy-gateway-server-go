@@ -4,9 +4,11 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -64,18 +66,21 @@ type gatewayServer struct {
 	metricsFactory MetricsFactory
 }
 
-func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
+func (s gatewayServer) formatConfiguration(w io.Writer) {
 	fmt.Fprint(w, "OHTTP Gateway\n")
 	fmt.Fprint(w, "----------------\n")
-	fmt.Fprintf(w, "Config endpoint: https://%s%s\n", r.Host, s.endpoints["Config"])
-	fmt.Fprintf(w, "Legacy config endpoint: https://%s%s\n", r.Host, s.endpoints["LegacyConfig"])
-	fmt.Fprintf(w, "Target endpoint: https://%s%s\n", r.Host, s.endpoints["Target"])
+	fmt.Fprintf(w, "Config endpoint: %s\n", s.endpoints["Config"])
+	fmt.Fprintf(w, "Legacy config endpoint: %s\n", s.endpoints["LegacyConfig"])
+	fmt.Fprintf(w, "Target endpoint: %s\n", s.endpoints["Target"])
 	fmt.Fprintf(w, "   Request content type:  %s\n", s.requestLabel)
 	fmt.Fprintf(w, "   Response content type: %s\n", s.responseLabel)
-	fmt.Fprintf(w, "Echo endpoint: https://%s%s\n", r.Host, s.endpoints["Echo"])
-	fmt.Fprintf(w, "Metadata endpoint: https://%s%s\n", r.Host, s.endpoints["Metadata"])
+	fmt.Fprintf(w, "Echo endpoint: %s\n", s.endpoints["Echo"])
+	fmt.Fprintf(w, "Metadata endpoint: %s\n", s.endpoints["Metadata"])
 	fmt.Fprint(w, "----------------\n")
+}
+
+func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
+	s.formatConfiguration(w)
 }
 
 func (s gatewayServer) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
@@ -289,6 +294,10 @@ func main() {
 	http.HandleFunc(configEndpoint, target.configHandler)
 	http.HandleFunc("/", server.indexHandler)
 
+	var b bytes.Buffer
+	server.formatConfiguration(io.Writer(&b))
+	log.Println(b.String())
+
 	if enableTLSServe {
 		log.Printf("Listening on port %v with cert %v and key %v\n", port, certFile, keyFile)
 		log.Fatal(http.ListenAndServeTLS(fmt.Sprintf(":%s", port), certFile, keyFile, nil))
@@ -296,5 +305,4 @@ func main() {
 		log.Printf("Listening on port %v without enabling TLS\n", port)
 		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", port), nil))
 	}
-
 }
