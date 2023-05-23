@@ -244,7 +244,7 @@ func UnmarshalEncapsulatedRequest(enc []byte) (EncapsulatedRequest, error) {
 	}
 	aeadID := hpke.AEAD(binary.BigEndian.Uint16(aeadIDBuffer))
 
-	key := make([]byte, kemID.Scheme().PublicKeySize())
+	key := make([]byte, kemID.Scheme().CiphertextSize())
 	_, err = b.Read(key)
 	if err != nil {
 		return EncapsulatedRequest{}, err
