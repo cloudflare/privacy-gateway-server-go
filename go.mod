@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/DataDog/datadog-go/v5 v5.1.1
-	github.com/chris-wood/ohttp-go v0.0.0-20230502102522-b8ae3b520d55
+	github.com/chris-wood/ohttp-go v0.0.0-20230523152405-45fb0d05eb13
 	github.com/cloudflare/circl v1.3.3
 	google.golang.org/protobuf v1.28.1
 )

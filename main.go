@@ -264,7 +264,7 @@ func main() {
 	handlers[metadataEndpoint] = metadataHandler // Metadata handler
 	target := &gatewayResource{
 		verbose:               verbose,
-		legacyKeyID:           configID,
+		legacyKeyID:           legacyConfigID,
 		gateway:               gateway,
 		encapsulationHandlers: handlers,
 		debugResponse:         debugResponse,

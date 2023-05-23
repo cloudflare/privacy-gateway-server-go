@@ -32,7 +32,7 @@ func createGateway(t *testing.T) ohttp.Gateway {
 	if err != nil {
 		t.Fatal("Failed to create a valid config. Exiting now.")
 	}
-	config, err := ohttp.NewConfig(CURRENT_KEY_ID, hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM)
+	config, err := ohttp.NewConfig(CURRENT_KEY_ID, hpke.KEM_X25519_KYBER768_DRAFT00, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM)
 	if err != nil {
 		t.Fatal("Failed to create a valid config. Exiting now.")
 	}
@@ -225,7 +225,6 @@ func testBodyContainsError(t *testing.T, resp *http.Response, expectedText strin
 }
 
 func testMetricsContainsResult(t *testing.T, metricsCollector *MockMetricsFactory, event string, result string) {
-
 	for _, metric := range metricsCollector.metrics {
 		if metric.eventName == event {
 			_, exists := metric.resultLabels[result]
@@ -259,6 +258,42 @@ func TestQueryHandlerInvalidContentType(t *testing.T) {
 
 	testBodyContainsError(t, rr.Result(), "Invalid content type: application/not-the-droids-youre-looking-for")
 	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultInvalidContentType)
+}
+
+func TestLegacyGatewayHandler(t *testing.T) {
+	target := createMockEchoGatewayServer(t)
+
+	handler := http.HandlerFunc(target.gatewayHandler)
+
+	config, err := target.gateway.Config(LEGACY_KEY_ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := ohttp.NewDefaultClient(config)
+
+	testMessage := []byte{0xCA, 0xFE}
+	req, _, err := client.EncapsulateRequest(testMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request, err := http.NewRequest(http.MethodPost, defaultEchoEndpoint, bytes.NewReader(req.Marshal()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "message/ohttp-req")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
+
+	if status := rr.Result().StatusCode; status != http.StatusOK {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+	}
+	if rr.Result().Header.Get("Content-Type") != "message/ohttp-res" {
+		t.Fatal("Invalid content type response")
+	}
+
+	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultSuccess)
 }
 
 func TestGatewayHandler(t *testing.T) {
