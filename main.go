@@ -56,6 +56,7 @@ const (
 	monitoringServiceNameEnvironmentVariable = "MONITORING_SERVICE_NAME"
 	gatewayDebugEnvironmentVariable          = "GATEWAY_DEBUG"
 	gatewayVerboseEnvironmentVariable        = "VERBOSE"
+	logSecretsEnvironmentVariable            = "LOG_SECRETS"
 )
 
 type gatewayServer struct {
@@ -128,9 +129,15 @@ func main() {
 		port = defaultPort
 	}
 
+	logSecrets := getBoolEnv(logSecretsEnvironmentVariable, false)
+
 	var seed []byte
 	if seedHex := os.Getenv(secretSeedEnvironmentVariable); seedHex != "" {
-		log.Printf("Using Secret Key Seed : [%v]", seedHex)
+		if logSecrets {
+			log.Printf("Using Secret Key Seed: [%v]", seedHex)
+		} else {
+			log.Print("Using Secret Key Seed provided in environment variable")
+		}
 		var err error
 		seed, err = hex.DecodeString(seedHex)
 		if err != nil {
