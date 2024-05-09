@@ -1,0 +1,24 @@
+name: docker
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  ohttp-gateway:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - run: echo "GIT_REVISION=$(git describe --always --dirty=-modified)" >> $GITHUB_ENV
+    - run: docker build \
+      --tag "privacy-gateway-server-go" \
+      --build-arg GIT_REVISION=${GIT_REVISION} \
+      -f Dockerfile \
+      .
+    - run: docker run --rm --tag "privacy-gateway-server-go" -version

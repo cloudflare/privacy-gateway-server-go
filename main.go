@@ -7,11 +7,13 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -58,6 +60,8 @@ const (
 	gatewayVerboseEnvironmentVariable        = "VERBOSE"
 	logSecretsEnvironmentVariable            = "LOG_SECRETS"
 )
+
+var versionFlag = flag.Bool("version", false, "print name and version to stdout")
 
 type gatewayServer struct {
 	requestLabel   string
@@ -124,6 +128,18 @@ func getStringEnv(key string, defaultVal string) string {
 }
 
 func main() {
+	flag.Parse()
+
+	if *versionFlag {
+		buildInfo, ok := debug.ReadBuildInfo()
+		if !ok {
+			log.Printf("could not determine build info")
+			os.Exit(1)
+		}
+		fmt.Printf("%s\n%+v", os.Args[0], buildInfo)
+		os.Exit(0)
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = defaultPort
