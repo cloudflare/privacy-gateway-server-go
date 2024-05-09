@@ -5,11 +5,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,11 +21,16 @@ import (
 )
 
 var (
-	LEGACY_KEY_ID    = uint8(0x00)
-	CURRENT_KEY_ID   = uint8(LEGACY_KEY_ID + 1)
-	FORBIDDEN_TARGET = "forbidden.example"
-	ALLOWED_TARGET   = "allowed.example"
-	GATEWAY_DEBUG    = true
+	LEGACY_KEY_ID                = uint8(0x00)
+	CURRENT_KEY_ID               = uint8(LEGACY_KEY_ID + 1)
+	FORBIDDEN_TARGET             = "forbidden.example"
+	ALLOWED_TARGET               = "allowed.example"
+	GATEWAY_DEBUG                = true
+	BINARY_HTTP_GATEWAY_ENDPOINT = "/binary-http-gateway"
+	TARGET_REWRITES              = `{
+		"original-1.example": { "Scheme": "http", "Host": "localhost:8888" },
+		"original-2.example": { "Scheme": "https", "Host": "localhost:9999"}
+}`
 )
 
 func createGateway(t *testing.T) ohttp.Gateway {
@@ -71,27 +77,21 @@ func (f *MockMetricsFactory) Create(eventName string) Metrics {
 	return metrics
 }
 
-type ForbiddenCheckHttpRequestHandler struct {
-	forbidden string
-}
-
 func mustGetMetricsFactory(t *testing.T, gateway gatewayResource) *MockMetricsFactory {
 	factory, ok := gateway.metricsFactory.(*MockMetricsFactory)
 	if !ok {
-		panic("Failed to get metrics factory")
+		t.Fatal("Failed to get metrics factory")
 	}
 	return factory
 }
 
-func (h ForbiddenCheckHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (*http.Response, error) {
-	if req.Host == h.forbidden {
-		metrics.Fire(metricsResultTargetRequestForbidden)
-		return nil, GatewayTargetForbiddenError
-	}
+type MockHTTPRequestHandler struct{}
 
-	metrics.Fire(metricsResultSuccess)
+func (d MockHTTPRequestHandler) Handle(req *http.Request, metrics Metrics) (*http.Response, error) {
 	return &http.Response{
 		StatusCode: http.StatusOK,
+		// Echo the URL back so tests can examine the scheme and host
+		Body: io.NopCloser(strings.NewReader(req.URL.String())),
 	}, nil
 }
 
@@ -101,11 +101,33 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 		gateway:    gateway,
 		appHandler: EchoAppHandler{},
 	}
+
+	allowedOrigins := make(map[string]bool)
+	allowedOrigins[ALLOWED_TARGET] = true
 	mockProtoHTTPFilterHandler := DefaultEncapsulationHandler{
 		gateway: gateway,
 		appHandler: ProtoHTTPAppHandler{
-			httpHandler: ForbiddenCheckHttpRequestHandler{
-				FORBIDDEN_TARGET,
+			httpHandler: FilteredHttpRequestHandler{
+				client:             MockHTTPRequestHandler{},
+				allowedOrigins:     allowedOrigins,
+				logForbiddenErrors: false,
+				targetRewrites:     nil,
+			},
+		},
+	}
+
+	var targetRewrites map[string]TargetRewrite
+	if err := json.Unmarshal([]byte(TARGET_REWRITES), &targetRewrites); err != nil {
+		t.Fatal("failed to unmarshal JSON target rewrites")
+	}
+	mockBinaryHTTPFilterHandler := DefaultEncapsulationHandler{
+		gateway: gateway,
+		appHandler: BinaryHTTPAppHandler{
+			httpHandler: FilteredHttpRequestHandler{
+				client:             MockHTTPRequestHandler{},
+				allowedOrigins:     nil,
+				logForbiddenErrors: false,
+				targetRewrites:     targetRewrites,
 			},
 		},
 	}
@@ -113,6 +135,7 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 	encapHandlers := make(map[string]EncapsulationHandler)
 	encapHandlers[defaultEchoEndpoint] = echoEncapHandler
 	encapHandlers[defaultGatewayEndpoint] = mockProtoHTTPFilterHandler
+	encapHandlers[BINARY_HTTP_GATEWAY_ENDPOINT] = mockBinaryHTTPFilterHandler
 	return gatewayResource{
 		gateway:               gateway,
 		encapsulationHandlers: encapHandlers,
@@ -143,7 +166,7 @@ func TestLegacyConfigHandler(t *testing.T) {
 		t.Fatal(fmt.Errorf("Failed request with error code: %d", status))
 	}
 
-	body, err := ioutil.ReadAll(rr.Result().Body)
+	body, err := io.ReadAll(rr.Result().Body)
 	if err != nil {
 		t.Fatal("Failed to read body:", err)
 	}
@@ -187,7 +210,7 @@ func TestConfigHandler(t *testing.T) {
 		t.Fatal(fmt.Errorf("Failed request with error code: %d", status))
 	}
 
-	body, err := ioutil.ReadAll(rr.Result().Body)
+	body, err := io.ReadAll(rr.Result().Body)
 	if err != nil {
 		t.Fatal("Failed to read body:", err)
 	}
@@ -515,7 +538,7 @@ func TestGatewayHandlerProtoHTTPRequestWithForbiddenTarget(t *testing.T) {
 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
 	}
 
-	bodyBytes, err := ioutil.ReadAll(rr.Body)
+	bodyBytes, err := io.ReadAll(rr.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +614,7 @@ func TestGatewayHandlerProtoHTTPRequestWithAllowedTarget(t *testing.T) {
 		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
 	}
 
-	bodyBytes, err := ioutil.ReadAll(rr.Body)
+	bodyBytes, err := io.ReadAll(rr.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -613,6 +636,267 @@ func TestGatewayHandlerProtoHTTPRequestWithAllowedTarget(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusOK, resp.StatusCode))
+	}
+
+	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultSuccess)
+}
+
+func TestGatewayHandlerBinaryHTTPWithTargetRewrite(t *testing.T) {
+	target := createMockEchoGatewayServer(t)
+
+	handler := http.HandlerFunc(target.gatewayHandler)
+
+	config, err := target.gateway.Config(CURRENT_KEY_ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := ohttp.NewDefaultClient(config)
+
+	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", "original-1.example", BINARY_HTTP_GATEWAY_ENDPOINT), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binaryRequest := ohttp.BinaryRequest(*httpRequest)
+
+	encodedRequest, err := binaryRequest.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, context, err := client.EncapsulateRequest(encodedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reqEnc := req.Marshal()
+
+	request, err := http.NewRequest(http.MethodPost, BINARY_HTTP_GATEWAY_ENDPOINT, bytes.NewReader(reqEnc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "message/ohttp-req")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
+
+	if status := rr.Result().StatusCode; status != http.StatusOK {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+	}
+
+	bodyBytes, err := io.ReadAll(rr.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	encapResp, err := ohttp.UnmarshalEncapsulatedResponse(bodyBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binaryResp, err := context.DecapsulateResponse(encapResp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := ohttp.UnmarshalBinaryResponse(binaryResp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusForbidden, resp.StatusCode))
+	}
+
+	encapsulatedRespBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rewrittenURL, err := url.Parse(string(encapsulatedRespBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rewrittenURL.Scheme != "http" {
+		t.Fatalf("rewritten request URL does not have scheme http: %s", rewrittenURL)
+	}
+
+	if rewrittenURL.Host != "localhost:8888" {
+		t.Fatalf("rewritten request URL does not have expected host: %s", rewrittenURL.Host)
+	}
+
+	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultSuccess)
+}
+
+func TestGatewayHandlerBinaryHTTPWithTargetRewriteChangingScheme(t *testing.T) {
+	target := createMockEchoGatewayServer(t)
+
+	handler := http.HandlerFunc(target.gatewayHandler)
+
+	config, err := target.gateway.Config(CURRENT_KEY_ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := ohttp.NewDefaultClient(config)
+
+	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", "original-2.example", BINARY_HTTP_GATEWAY_ENDPOINT), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binaryRequest := ohttp.BinaryRequest(*httpRequest)
+
+	encodedRequest, err := binaryRequest.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, context, err := client.EncapsulateRequest(encodedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reqEnc := req.Marshal()
+
+	request, err := http.NewRequest(http.MethodPost, BINARY_HTTP_GATEWAY_ENDPOINT, bytes.NewReader(reqEnc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "message/ohttp-req")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
+
+	if status := rr.Result().StatusCode; status != http.StatusOK {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+	}
+
+	bodyBytes, err := io.ReadAll(rr.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	encapResp, err := ohttp.UnmarshalEncapsulatedResponse(bodyBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binaryResp, err := context.DecapsulateResponse(encapResp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := ohttp.UnmarshalBinaryResponse(binaryResp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusForbidden, resp.StatusCode))
+	}
+
+	encapsulatedRespBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rewrittenURL, err := url.Parse(string(encapsulatedRespBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rewrittenURL.Scheme != "https" {
+		t.Fatalf("rewritten request URL does not have scheme https: %s", rewrittenURL)
+	}
+
+	if rewrittenURL.Host != "localhost:9999" {
+		t.Fatalf("rewritten request URL does not have expected host: %s", rewrittenURL.Host)
+	}
+
+	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultSuccess)
+}
+
+func TestGatewayHandlerBinaryHTTPWithTargetRewriteNoRewrite(t *testing.T) {
+	target := createMockEchoGatewayServer(t)
+
+	handler := http.HandlerFunc(target.gatewayHandler)
+
+	config, err := target.gateway.Config(CURRENT_KEY_ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := ohttp.NewDefaultClient(config)
+
+	httpRequest, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s%s", "original-3.example", BINARY_HTTP_GATEWAY_ENDPOINT), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binaryRequest := ohttp.BinaryRequest(*httpRequest)
+
+	encodedRequest, err := binaryRequest.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, context, err := client.EncapsulateRequest(encodedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reqEnc := req.Marshal()
+
+	request, err := http.NewRequest(http.MethodPost, BINARY_HTTP_GATEWAY_ENDPOINT, bytes.NewReader(reqEnc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Add("Content-Type", "message/ohttp-req")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, request)
+
+	if status := rr.Result().StatusCode; status != http.StatusOK {
+		t.Fatal(fmt.Errorf("Result did not yield %d, got %d instead", http.StatusOK, status))
+	}
+
+	bodyBytes, err := io.ReadAll(rr.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	encapResp, err := ohttp.UnmarshalEncapsulatedResponse(bodyBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binaryResp, err := context.DecapsulateResponse(encapResp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := ohttp.UnmarshalBinaryResponse(binaryResp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(fmt.Errorf("Encapsulated result did not yield %d, got %d instead", http.StatusForbidden, resp.StatusCode))
+	}
+
+	encapsulatedRespBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rewrittenURL, err := url.Parse(string(encapsulatedRespBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rewrittenURL.Scheme != "http" {
+		t.Fatalf("rewritten request URL does not have scheme http: %s", rewrittenURL)
+	}
+
+	if rewrittenURL.Host != "original-3.example" {
+		t.Fatalf("rewritten request URL does not have expected host: %s", rewrittenURL.Host)
 	}
 
 	testMetricsContainsResult(t, mustGetMetricsFactory(t, target), metricsEventGatewayRequest, metricsResultSuccess)
