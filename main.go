@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -59,6 +60,7 @@ const (
 	gatewayDebugEnvironmentVariable          = "GATEWAY_DEBUG"
 	gatewayVerboseEnvironmentVariable        = "VERBOSE"
 	logSecretsEnvironmentVariable            = "LOG_SECRETS"
+	targetRewritesVariables                  = "TARGET_REWRITES"
 )
 
 var versionFlag = flag.Bool("version", false, "print name and version to stdout")
@@ -174,6 +176,13 @@ func main() {
 		}
 	}
 
+	var targetRewrites map[string]TargetRewrite
+	if targetRewritesJson := os.Getenv(targetRewritesVariables); targetRewritesJson != "" {
+		if err := json.Unmarshal([]byte(targetRewritesJson), &targetRewrites); err != nil {
+			log.Fatalf("Failed to parse target rewrites: %s", err)
+		}
+	}
+
 	var certFile string
 	if certFile = os.Getenv(certificateEnvironmentVariable); certFile == "" {
 		certFile = "cert.pem"
@@ -209,9 +218,10 @@ func main() {
 
 	// Create the default HTTP handler
 	httpHandler := FilteredHttpRequestHandler{
-		client:             &http.Client{},
+		client:             HTTPClientRequestHandler{client: &http.Client{}},
 		allowedOrigins:     allowedOrigins,
 		logForbiddenErrors: verbose,
+		targetRewrites:     targetRewrites,
 	}
 
 	// Create the default gateway and its request handler chain

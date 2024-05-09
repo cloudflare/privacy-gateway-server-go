@@ -29,6 +29,42 @@ The behavior of the gateway is configurable via a number of environment variable
 - ALLOWED_TARGET_ORIGINS: This environment variable contains a comma-separated list of target origin names that the gateway is allowed to access. When configured, the gateway will only attempt to resolve requests to target origins in this list. Any other request will yield a HTTP 403 Forbidden return code.
 - CERT: This environment variable is the name of a file containing the certificate (chain) used to serve TLS connections.
 - KEY: This environment variable is the name of a file containing the private key used to serve TLS connections.
+- TARGET_REWRITES: This environment variable contains a JSON document instructing the gateway to rewrite the target URL found in an encapsulated request to some specified scheme and host.
+
+### Target URL rewrites
+
+The `TARGET_REWRITES` configuration option is useful to set up forwarding between the gateway and target when both are on a private network or if they share a loopback interface. For example, suppose that the target is exposed to the internet at `https://example.org`, but also reachable by the gateway at `http://localhost:8080` (note `http` and not `https`). It's more efficient to redirect traffic over `localhost` than back out over the internet, so you could set `TARGET_REWRITES` to:
+
+```json
+{
+	"example.org": { "Scheme": "http", "Host": "localhost:8080" }
+}
+```
+
+Then the encapsulated HTTP requests
+
+```http
+POST /some-cool-api HTTP/1.1
+Host: example.org
+
+some content
+```
+
+or
+
+```http
+POST https://example.org/some-cool-api HTTP/1.1
+
+some content
+```
+
+...would both be rewritten to:
+
+```http
+POST http://localhost:8080/some-cool-api HTTP/1.1
+
+some content
+```
 
 ## Custom Application Payloads {#custom-config}
 
