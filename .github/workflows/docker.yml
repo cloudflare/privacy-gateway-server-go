@@ -16,9 +16,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - run: echo "GIT_REVISION=$(git describe --always --dirty=-modified)" >> $GITHUB_ENV
-    - run: docker build \
-      --tag "privacy-gateway-server-go" \
-      --build-arg GIT_REVISION=${GIT_REVISION} \
-      -f Dockerfile \
-      .
-    - run: docker run --rm --tag "privacy-gateway-server-go" -version
+    - run: |-
+        docker build \
+          --tag "privacy-gateway-server-go" \
+          --build-arg GIT_REVISION=${GIT_REVISION} \
+          -f Dockerfile \
+          .
+    - run: docker run --entrypoint /privacy-gateway-server --rm privacy-gateway-server-go -version
