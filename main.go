@@ -61,6 +61,7 @@ const (
 	gatewayVerboseEnvironmentVariable        = "VERBOSE"
 	logSecretsEnvironmentVariable            = "LOG_SECRETS"
 	targetRewritesVariables                  = "TARGET_REWRITES"
+	prometheusConfigVariable                 = "PROMETHEUS_CONFIG"
 )
 
 var versionFlag = flag.Bool("version", false, "print name and version to stdout")
@@ -198,8 +199,6 @@ func main() {
 	debugResponse := getBoolEnv(gatewayDebugEnvironmentVariable, false)
 	verbose := getBoolEnv(gatewayVerboseEnvironmentVariable, false)
 
-	monitoringServiceName := getStringEnv(monitoringServiceNameEnvironmentVariable, defaultMonitoringServiceName)
-
 	configID := uint8(getUintEnv(configurationIdEnvironmentVariable, 0))
 	config, err := ohttp.NewConfigFromSeed(configID, hpke.KEM_X25519_KYBER768_DRAFT00, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM, seed)
 	if err != nil {
@@ -263,23 +262,38 @@ func main() {
 	}
 
 	// Configure metrics
-	metricsHost := os.Getenv(statsdHostVariable)
-	metricsPort := os.Getenv(statsdPortVariable)
-	metricsTimeout, err := strconv.ParseInt(os.Getenv(statsdTimeoutVariable), 10, 64)
-	if err != nil {
-		log.Printf("Failed parsing metrics timeout: %s", err)
-		metricsTimeout = 100
-	}
-	client, err := createStatsDClient(metricsHost, metricsPort, int(metricsTimeout))
-	if err != nil {
-		log.Fatalf("Failed to create statsd client: %s", err)
-	}
-	defer client.Close()
+	var metricsFactory MetricsFactory
 
-	metricsFactory := &StatsDMetricsFactory{
-		serviceName: monitoringServiceName,
-		metricsName: "ohttp_gateway_duration",
-		client:      client,
+	if prometheusConfigJSON := os.Getenv(prometheusConfigVariable); prometheusConfigJSON != "" {
+		var prometheusConfig PrometheusConfig
+		if err := json.Unmarshal([]byte(prometheusConfigJSON), &prometheusConfig); err != nil {
+			log.Fatalf("Failed to parse Prometheus config: %s", err)
+		}
+
+		metricsFactory, err = NewPrometheusMetricsFactory(prometheusConfig)
+		if err != nil {
+			log.Fatalf("Failed to configure Prometheus metrics: %s", err)
+		}
+	} else {
+		// Default to StatsD metrics
+		monitoringServiceName := getStringEnv(monitoringServiceNameEnvironmentVariable, defaultMonitoringServiceName)
+		metricsHost := os.Getenv(statsdHostVariable)
+		metricsPort := os.Getenv(statsdPortVariable)
+		metricsTimeout, err := strconv.ParseInt(getStringEnv(statsdTimeoutVariable, "100"), 10, 64)
+		if err != nil {
+			log.Fatalf("Failed parsing metrics timeout: %s", err)
+		}
+		client, err := createStatsDClient(metricsHost, metricsPort, int(metricsTimeout))
+		if err != nil {
+			log.Fatalf("Failed to create statsd client: %s", err)
+		}
+		defer client.Close()
+
+		metricsFactory = &StatsDMetricsFactory{
+			serviceName: monitoringServiceName,
+			metricsName: "ohttp_gateway_duration",
+			client:      client,
+		}
 	}
 
 	// Load endpoint configuration defaults
