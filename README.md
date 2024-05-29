@@ -29,6 +29,10 @@ The behavior of the gateway is configurable via a number of environment variable
 - ALLOWED_TARGET_ORIGINS: This environment variable contains a comma-separated list of target origin names that the gateway is allowed to access. When configured, the gateway will only attempt to resolve requests to target origins in this list. Any other request will yield a HTTP 403 Forbidden return code.
 - CERT: This environment variable is the name of a file containing the certificate (chain) used to serve TLS connections.
 - KEY: This environment variable is the name of a file containing the private key used to serve TLS connections.
+- LOG_FORMAT: This environment variable controls the format in which events are logged. Supported values are:
+	- `default`: events are run through [`slog.TextHandler`](https://pkg.go.dev/log/slog@master#TextHandler).
+	- `json`: events are run through [`slog.JSONHandler`](https://pkg.go.dev/log/slog#JSONHandler).
+- LOG_LEVEL: This environment variable controls how noisy logs are. The supported values correspond to the [`slog.Level` values](https://pkg.go.dev/log/slog@master#Level).
 - TARGET_REWRITES: This environment variable contains a JSON document instructing the gateway to rewrite the target URL found in an encapsulated request to some specified scheme and host.
 
 ### Target URL rewrites

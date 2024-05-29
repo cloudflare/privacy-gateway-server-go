@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"time"
 
@@ -22,7 +22,7 @@ func (s *StatsDMetrics) Fire(result string) {
 
 	err := s.client.TimeInMilliseconds(s.metricsName, float64(time.Since(s.startedAt).Milliseconds()), tags, 1)
 	if err != nil {
-		log.Printf("Cannot send metrics to statsd: %s", err)
+		slog.Warn("Cannot send metrics to statsd", "error", err)
 	}
 }
 

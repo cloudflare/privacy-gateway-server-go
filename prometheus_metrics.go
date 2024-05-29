@@ -6,9 +6,10 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -63,8 +64,9 @@ func NewPrometheusMetricsFactory(config PrometheusConfig) (MetricsFactory, error
 	}
 
 	go func() {
-		log.Printf("Listening for Prometheus scrapes on %s:%s\n", config.Host, config.Port)
-		log.Fatal(server.ListenAndServe())
+		slog.Debug("Listening for Prometheus scrapes", "host", config.Host, "port", config.Port)
+		slog.Error("Error serving Prometheus scrapes", "error", server.ListenAndServe())
+		os.Exit(1)
 	}()
 
 	return &PrometheusMetricsFactory{metricName: config.MetricName}, nil

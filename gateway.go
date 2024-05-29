@@ -6,7 +6,7 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"time"
@@ -15,7 +15,6 @@ import (
 )
 
 type gatewayResource struct {
-	verbose               bool
 	legacyKeyID           uint8
 	gateway               ohttp.Gateway
 	encapsulationHandlers map[string]EncapsulationHandler
@@ -39,9 +38,7 @@ const (
 )
 
 func (s *gatewayResource) httpError(w http.ResponseWriter, status int, debugMessage string, metrics Metrics, metricsPrefix string) {
-	if s.verbose {
-		log.Println(debugMessage)
-	}
+	slog.Debug(debugMessage)
 	if s.debugResponse {
 		http.Error(w, debugMessage, status)
 	} else {
@@ -51,9 +48,7 @@ func (s *gatewayResource) httpError(w http.ResponseWriter, status int, debugMess
 }
 
 func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request) {
-	if s.verbose {
-		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
-	}
+	slog.Debug("HTTP request", "method", r.Method, "path", r.URL.Path)
 
 	metrics := s.metricsFactory.Create(metricsEventGatewayRequest)
 
@@ -92,9 +87,7 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 
 	encapsulatedResp, err := encapHandler.Handle(r, encapsulatedReq, metrics)
 	if err != nil {
-		if s.verbose {
-			log.Printf(err.Error())
-		}
+		slog.Debug("encap handler", "error", err)
 
 		errorCode := encapsulationErrorToGatewayStatusCode(err)
 		s.httpError(w, errorCode, http.StatusText(errorCode), metrics, r.Method)
@@ -110,14 +103,12 @@ func (s *gatewayResource) gatewayHandler(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *gatewayResource) legacyConfigHandler(w http.ResponseWriter, r *http.Request) {
-	if s.verbose {
-		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
-	}
+	slog.Debug("HTTP request", "method", r.Method, "path", r.URL.Path)
 	metrics := s.metricsFactory.Create(metricsEventConfigsRequest)
 
 	config, err := s.gateway.Config(s.legacyKeyID)
 	if err != nil {
-		log.Printf("Config unavailable")
+		slog.Warn("Config unavailable")
 		metrics.Fire(metricsResultConfigsUnavalable)
 		s.httpError(w, http.StatusInternalServerError, "Config unavailable", metrics, r.Method)
 		return
@@ -134,9 +125,7 @@ func (s *gatewayResource) legacyConfigHandler(w http.ResponseWriter, r *http.Req
 }
 
 func (s *gatewayResource) configHandler(w http.ResponseWriter, r *http.Request) {
-	if s.verbose {
-		log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
-	}
+	slog.Debug("HTTP request", "method", r.Method, "path", r.URL.Path)
 	metrics := s.metricsFactory.Create(metricsEventConfigsRequest)
 
 	// Make expiration time even/random throughout interval 12-36h

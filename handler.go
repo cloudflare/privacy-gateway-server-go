@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"io/ioutil"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"strconv"
@@ -316,10 +316,9 @@ func (h HTTPClientRequestHandler) Handle(req *http.Request, metrics Metrics) (*h
 // FilteredHttpRequestHandler represents a HttpRequestHandler that restricts
 // outbound HTTP requests to an allowed set of targets.
 type FilteredHttpRequestHandler struct {
-	client             HTTPRequestHandler
-	allowedOrigins     map[string]bool
-	targetRewrites     map[string]TargetRewrite
-	logForbiddenErrors bool
+	client         HTTPRequestHandler
+	allowedOrigins map[string]bool
+	targetRewrites map[string]TargetRewrite
 }
 
 // Handle processes HTTP requests to targets that are permitted according to a list of
@@ -329,10 +328,8 @@ func (h FilteredHttpRequestHandler) Handle(req *http.Request, metrics Metrics) (
 		_, ok := h.allowedOrigins[req.Host]
 		if !ok {
 			metrics.Fire(metricsResultTargetRequestForbidden)
-			if h.logForbiddenErrors {
-				// to allow clients to fix improper third party urls usage (e.g. to change URLs from our direct s3 refs to CDN)
-				log.Printf("TargetForbiddenError: %s, %s", req.Host, req.URL)
-			}
+			// to allow clients to fix improper third party urls usage (e.g. to change URLs from our direct s3 refs to CDN)
+			slog.Debug("TargetForbiddenError", "host", req.Host, "URL", req.URL)
 			return nil, GatewayTargetForbiddenError
 		}
 	}
