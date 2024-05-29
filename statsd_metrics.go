@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"time"
 
 	"github.com/DataDog/datadog-go/v5/statsd"
@@ -34,7 +35,7 @@ func createStatsDClient(host, port string, timeout int) (statsd.ClientInterface,
 		return &statsd.NoOpClient{}, nil
 	}
 
-	return statsd.New(host+":"+port, statsd.WithWriteTimeout(time.Duration(timeout)*time.Millisecond), statsd.WithoutTelemetry())
+	return statsd.New(net.JoinHostPort(host, port), statsd.WithWriteTimeout(time.Duration(timeout)*time.Millisecond), statsd.WithoutTelemetry())
 }
 
 type StatsDMetricsFactory struct {
