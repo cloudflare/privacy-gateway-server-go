@@ -108,10 +108,9 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 		gateway: gateway,
 		appHandler: ProtoHTTPAppHandler{
 			httpHandler: FilteredHttpRequestHandler{
-				client:             MockHTTPRequestHandler{},
-				allowedOrigins:     allowedOrigins,
-				logForbiddenErrors: false,
-				targetRewrites:     nil,
+				client:         MockHTTPRequestHandler{},
+				allowedOrigins: allowedOrigins,
+				targetRewrites: nil,
 			},
 		},
 	}
@@ -124,10 +123,9 @@ func createMockEchoGatewayServer(t *testing.T) gatewayResource {
 		gateway: gateway,
 		appHandler: BinaryHTTPAppHandler{
 			httpHandler: FilteredHttpRequestHandler{
-				client:             MockHTTPRequestHandler{},
-				allowedOrigins:     nil,
-				logForbiddenErrors: false,
-				targetRewrites:     targetRewrites,
+				client:         MockHTTPRequestHandler{},
+				allowedOrigins: nil,
+				targetRewrites: targetRewrites,
 			},
 		},
 	}

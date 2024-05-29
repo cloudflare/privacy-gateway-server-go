@@ -11,7 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -58,10 +58,15 @@ const (
 	statsdTimeoutVariable                    = "MONITORING_STATSD_TIMEOUT_MS"
 	monitoringServiceNameEnvironmentVariable = "MONITORING_SERVICE_NAME"
 	gatewayDebugEnvironmentVariable          = "GATEWAY_DEBUG"
-	gatewayVerboseEnvironmentVariable        = "VERBOSE"
 	logSecretsEnvironmentVariable            = "LOG_SECRETS"
+	logLevelEnvironmentVariable              = "LOG_LEVEL"
+	logFormatEnvironmentVariable             = "LOG_FORMAT"
 	targetRewritesVariables                  = "TARGET_REWRITES"
 	prometheusConfigVariable                 = "PROMETHEUS_CONFIG"
+
+	// Values for LOG_FORMAT environment variable
+	logFormatDefault = "default"
+	logFormatJSON    = "json"
 )
 
 var versionFlag = flag.Bool("version", false, "print name and version to stdout")
@@ -92,7 +97,7 @@ func (s gatewayServer) indexHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s gatewayServer) healthCheckHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("%s Handling %s\n", r.Method, r.URL.Path)
+	slog.Debug("HTTP request", "method", r.Method, "path", r.URL.Path)
 	fmt.Fprint(w, "ok")
 }
 
@@ -133,13 +138,34 @@ func getStringEnv(key string, defaultVal string) string {
 func main() {
 	flag.Parse()
 
+	var logLevel slog.Level
+	if err := logLevel.UnmarshalText([]byte(getStringEnv(logLevelEnvironmentVariable, "info"))); err != nil {
+		slog.Error("invalid log level")
+		os.Exit(1)
+	}
+
+	handlerOptions := slog.HandlerOptions{Level: logLevel}
+	var handler slog.Handler
+
+	switch logFormat := getStringEnv(logFormatEnvironmentVariable, logFormatDefault); logFormat {
+	case logFormatDefault:
+		handler = slog.NewTextHandler(os.Stdout, &handlerOptions)
+	case logFormatJSON:
+		handler = slog.NewJSONHandler(os.Stdout, &handlerOptions)
+	default:
+		slog.Error("invalid log format", "format", logFormat)
+		os.Exit(1)
+	}
+
+	slog.SetDefault(slog.New(handler))
+
 	if *versionFlag {
 		buildInfo, ok := debug.ReadBuildInfo()
 		if !ok {
-			log.Printf("could not determine build info")
+			slog.Error("could not determine build info")
 			os.Exit(1)
 		}
-		fmt.Printf("%s\n%+v", os.Args[0], buildInfo)
+		slog.Info(os.Args[0], "buildInfo", buildInfo)
 		os.Exit(0)
 	}
 
@@ -153,9 +179,9 @@ func main() {
 	var seed []byte
 	if seedHex := os.Getenv(secretSeedEnvironmentVariable); seedHex != "" {
 		if logSecrets {
-			log.Printf("Using Secret Key Seed: [%v]", seedHex)
+			slog.Info("Using Secret Key Seed", "seed", seedHex)
 		} else {
-			log.Print("Using Secret Key Seed provided in environment variable")
+			slog.Info("Using Secret Key Seed provided in environment variable")
 		}
 		var err error
 		seed, err = hex.DecodeString(seedHex)
@@ -180,7 +206,8 @@ func main() {
 	var targetRewrites map[string]TargetRewrite
 	if targetRewritesJson := os.Getenv(targetRewritesVariables); targetRewritesJson != "" {
 		if err := json.Unmarshal([]byte(targetRewritesJson), &targetRewrites); err != nil {
-			log.Fatalf("Failed to parse target rewrites: %s", err)
+			slog.Error("Failed to parse target rewrites", "error", err)
+			os.Exit(1)
 		}
 	}
 
@@ -197,12 +224,12 @@ func main() {
 	}
 
 	debugResponse := getBoolEnv(gatewayDebugEnvironmentVariable, false)
-	verbose := getBoolEnv(gatewayVerboseEnvironmentVariable, false)
 
 	configID := uint8(getUintEnv(configurationIdEnvironmentVariable, 0))
 	config, err := ohttp.NewConfigFromSeed(configID, hpke.KEM_X25519_KYBER768_DRAFT00, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM, seed)
 	if err != nil {
-		log.Fatalf("Failed to create gateway configuration from seed: %s", err)
+		slog.Error("Failed to create gateway configuration from seed", "error", err)
+		os.Exit(1)
 	}
 
 	// From the primary configuration ID, create a key ID for the legacy configuration that old
@@ -212,15 +239,15 @@ func main() {
 	seed[len(seed)-1] ^= 0xFF
 	legacyConfig, err := ohttp.NewConfigFromSeed(legacyConfigID, hpke.KEM_X25519_HKDF_SHA256, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM, seed)
 	if err != nil {
-		log.Fatalf("Failed to create legacy gateway configuration from seed: %s", err)
+		slog.Error("Failed to create legacy gateway configuration from seed", "error", err)
+		os.Exit(1)
 	}
 
 	// Create the default HTTP handler
 	httpHandler := FilteredHttpRequestHandler{
-		client:             HTTPClientRequestHandler{client: &http.Client{}},
-		allowedOrigins:     allowedOrigins,
-		logForbiddenErrors: verbose,
-		targetRewrites:     targetRewrites,
+		client:         HTTPClientRequestHandler{client: &http.Client{}},
+		allowedOrigins: allowedOrigins,
+		targetRewrites: targetRewrites,
 	}
 
 	// Create the default gateway and its request handler chain
@@ -267,12 +294,14 @@ func main() {
 	if prometheusConfigJSON := os.Getenv(prometheusConfigVariable); prometheusConfigJSON != "" {
 		var prometheusConfig PrometheusConfig
 		if err := json.Unmarshal([]byte(prometheusConfigJSON), &prometheusConfig); err != nil {
-			log.Fatalf("Failed to parse Prometheus config: %s", err)
+			slog.Error("Failed to parse Prometheus config", "error", err)
+			os.Exit(1)
 		}
 
 		metricsFactory, err = NewPrometheusMetricsFactory(prometheusConfig)
 		if err != nil {
-			log.Fatalf("Failed to configure Prometheus metrics: %s", err)
+			slog.Error("Failed to configure Prometheus metrics", "error", err)
+			os.Exit(1)
 		}
 	} else {
 		// Default to StatsD metrics
@@ -281,11 +310,13 @@ func main() {
 		metricsPort := os.Getenv(statsdPortVariable)
 		metricsTimeout, err := strconv.ParseInt(getStringEnv(statsdTimeoutVariable, "100"), 10, 64)
 		if err != nil {
-			log.Fatalf("Failed parsing metrics timeout: %s", err)
+			slog.Error("Failed parsing metrics timeout", "error", err)
+			os.Exit(1)
 		}
 		client, err := createStatsDClient(metricsHost, metricsPort, int(metricsTimeout))
 		if err != nil {
-			log.Fatalf("Failed to create statsd client: %s", err)
+			slog.Error("Failed to create statsd client", "error", err)
+			os.Exit(1)
 		}
 		defer client.Close()
 
@@ -310,7 +341,6 @@ func main() {
 	handlers[echoEndpoint] = echoHandler         // Content-agnostic handler
 	handlers[metadataEndpoint] = metadataHandler // Metadata handler
 	target := &gatewayResource{
-		verbose:               verbose,
 		legacyKeyID:           legacyConfigID,
 		gateway:               gateway,
 		encapsulationHandlers: handlers,
@@ -343,13 +373,15 @@ func main() {
 
 	var b bytes.Buffer
 	server.formatConfiguration(io.Writer(&b))
-	log.Println(b.String())
+	slog.Debug(b.String())
 
 	if enableTLSServe {
-		log.Printf("Listening on port %v with cert %v and key %v\n", port, certFile, keyFile)
-		log.Fatal(http.ListenAndServeTLS(fmt.Sprintf(":%s", port), certFile, keyFile, nil))
+		slog.Debug("Listening", "cert", certFile, "key", "keyFile", "port", port)
+		slog.Error("error serving TLS", "error", http.ListenAndServeTLS(fmt.Sprintf(":%s", port), certFile, keyFile, nil))
+		os.Exit(1)
 	} else {
-		log.Printf("Listening on port %v without enabling TLS\n", port)
-		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", port), nil))
+		slog.Debug("Listening without enabling TLS", "port", port)
+		slog.Error("error serving non-TLS", "error", http.ListenAndServe(fmt.Sprintf(":%s", port), nil))
+		os.Exit(1)
 	}
 }
