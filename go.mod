@@ -1,11 +1,11 @@
 module github.com/cloudflare/app-gateway-go
 
-go 1.21
+go 1.22.0
 
 require (
 	github.com/DataDog/datadog-go/v5 v5.1.1
 	github.com/chris-wood/ohttp-go v0.0.0-20230523152405-45fb0d05eb13
-	github.com/cloudflare/circl v1.3.7
+	github.com/cloudflare/circl v1.6.1
 	google.golang.org/protobuf v1.33.0
 )
 
