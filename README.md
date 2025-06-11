@@ -34,6 +34,7 @@ The behavior of the gateway is configurable via a number of environment variable
 	- `json`: events are run through [`slog.JSONHandler`](https://pkg.go.dev/log/slog#JSONHandler).
 - LOG_LEVEL: This environment variable controls how noisy logs are. The supported values correspond to the [`slog.Level` values](https://pkg.go.dev/log/slog@master#Level).
 - TARGET_REWRITES: This environment variable contains a JSON document instructing the gateway to rewrite the target URL found in an encapsulated request to some specified scheme and host.
+- KEY_ROTATION_INTERVAL: This environment variable sets the number of days before renewing the gateway private and public key pair. The default value is 0, meaning that they will never expire.
 
 ### Target URL rewrites
 
