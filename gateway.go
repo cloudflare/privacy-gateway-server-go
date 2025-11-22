@@ -20,6 +20,7 @@ type gatewayResource struct {
 	encapsulationHandlers map[string]EncapsulationHandler
 	debugResponse         bool
 	metricsFactory        MetricsFactory
+	keyRotationInteval    uint8
 }
 
 const (

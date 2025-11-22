@@ -63,6 +63,7 @@ const (
 	logFormatEnvironmentVariable             = "LOG_FORMAT"
 	targetRewritesVariables                  = "TARGET_REWRITES"
 	prometheusConfigVariable                 = "PROMETHEUS_CONFIG"
+	configKeyRotationInterval                = "KEY_ROTATION_INTERVAL"
 
 	// Values for LOG_FORMAT environment variable
 	logFormatDefault = "default"
@@ -335,6 +336,10 @@ func main() {
 	metadataEndpoint := getStringEnv(metadataEndpointEnvVariable, defaultMetadataEndpoint)
 	healthEndpoint := getStringEnv(healthEndpointEnvVariable, defaultHealthEndpoint)
 
+	// Interval in days for the renewing of the public and private key pair of the gateway.
+	// If 0, it never expire.
+	keyRotationInterval := uint8(getUintEnv(configKeyRotationInterval, 0))
+
 	// Install configuration endpoints
 	handlers := make(map[string]EncapsulationHandler)
 	handlers[gatewayEndpoint] = targetHandler    // Content-specific handler
@@ -346,6 +351,7 @@ func main() {
 		encapsulationHandlers: handlers,
 		debugResponse:         debugResponse,
 		metricsFactory:        metricsFactory,
+		keyRotationInteval:    keyRotationInterval,
 	}
 
 	endpoints := make(map[string]string)
