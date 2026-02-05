@@ -229,6 +229,9 @@ func UnmarshalEncapsulatedRequest(enc []byte) (EncapsulatedRequest, error) {
 		return EncapsulatedRequest{}, err
 	}
 	kemID := hpke.KEM(binary.BigEndian.Uint16(kemIDBuffer))
+	if !kemID.IsValid() {
+		return EncapsulatedRequest{}, fmt.Errorf("invalid KEM")
+	}
 
 	kdfIDBuffer := make([]byte, 2)
 	_, err = b.Read(kdfIDBuffer)
@@ -236,6 +239,9 @@ func UnmarshalEncapsulatedRequest(enc []byte) (EncapsulatedRequest, error) {
 		return EncapsulatedRequest{}, err
 	}
 	kdfID := hpke.KDF(binary.BigEndian.Uint16(kdfIDBuffer))
+	if !kdfID.IsValid() {
+		return EncapsulatedRequest{}, fmt.Errorf("invalid KDF")
+	}
 
 	aeadIDBuffer := make([]byte, 2)
 	_, err = b.Read(aeadIDBuffer)
@@ -243,6 +249,9 @@ func UnmarshalEncapsulatedRequest(enc []byte) (EncapsulatedRequest, error) {
 		return EncapsulatedRequest{}, err
 	}
 	aeadID := hpke.AEAD(binary.BigEndian.Uint16(aeadIDBuffer))
+	if !aeadID.IsValid() {
+		return EncapsulatedRequest{}, fmt.Errorf("invalid AEAD")
+	}
 
 	key := make([]byte, kemID.Scheme().CiphertextSize())
 	_, err = b.Read(key)
