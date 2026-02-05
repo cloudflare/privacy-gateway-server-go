@@ -27,6 +27,7 @@ const (
 var (
 	errProhibitedField           = errors.New("Prohibited field detected")
 	errInformationalNotSupported = errors.New("Informational messages not supported")
+	errTruncated                 = errors.New("Truncated buffer")
 )
 
 func isProhibitedField(fieldName string) bool {
@@ -62,6 +63,9 @@ func readVarintSlice(b *bytes.Buffer) ([]byte, error) {
 	len, err := Read(b)
 	if err != nil {
 		return nil, err
+	}
+	if len > uint64(b.Len()) {
+		return nil, errTruncated
 	}
 	value := make([]byte, len)
 	_, err = b.Read(value)
