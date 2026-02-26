@@ -131,7 +131,7 @@ type MetadataEncapsulationHandler struct {
 	gateway ohttp.Gateway
 }
 
-// Handle attempts to decapsulate the incoming encapsulated request and, if successful, foramts
+// Handle attempts to decapsulate the incoming encapsulated request and, if successful, formats
 // metadata from the request context, and then encapsulates and returns the result.
 func (h MetadataEncapsulationHandler) Handle(outerRequest *http.Request, encapsulatedReq ohttp.EncapsulatedRequest, metrics Metrics) (ohttp.EncapsulatedResponse, error) {
 	if !h.gateway.MatchesConfig(encapsulatedReq) {
