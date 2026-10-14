@@ -1,13 +1,11 @@
 module github.com/cloudflare/app-gateway-go
 
-go 1.24.0
-
-toolchain go1.24.4
+go 1.25.0
 
 require (
 	github.com/DataDog/datadog-go/v5 v5.1.1
-	github.com/chris-wood/ohttp-go v0.0.0-20260205154755-776f22a178b8
-	github.com/cloudflare/circl v1.6.3
+	github.com/chris-wood/ohttp-go v0.0.0-20261007180712-07895fd0de0d
+	github.com/cloudflare/circl v1.6.5
 	google.golang.org/protobuf v1.33.0
 )
 
@@ -22,6 +20,6 @@ require (
 require (
 	github.com/Microsoft/go-winio v0.5.0 // indirect
 	github.com/prometheus/client_golang v1.19.1
-	golang.org/x/crypto v0.47.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 )

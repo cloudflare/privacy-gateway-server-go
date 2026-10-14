@@ -13,7 +13,11 @@ By default, the gateway exposes the following API endpoints:
 - "/ohttp-configs": An endpoint that will provide an [encoded KeyConfig](https://datatracker.ietf.org/doc/html/draft-ietf-ohai-ohttp-02#section-3.1).
 - "/health": An endpoint for inspecting the health of the gateway (returns 200 in normal conditions).
 
-The gateway only supports the [HPKE](https://datatracker.ietf.org/doc/html/rfc9180) ciphersuite based on DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, and AES-128-GCM.
+The gateway always serves three [HPKE](https://datatracker.ietf.org/doc/html/rfc9180) ciphersuites:
+
+- DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, and AES-128-GCM (defined in RFC 9180)
+- X25519Kyber768Draft00, HKDF-SHA256, and AES-128-GCM (defined in [draft-westerbaan-cfrg-hpke-xyber768d00-02](https://datatracker.ietf.org/doc/html/draft-westerbaan-cfrg-hpke-xyber768d00-02/))
+- X-Wing aka MLKEM768-X25519, HKDF-SHA256, and AES-128-GCM (defined in [draft-ietf-hpke-pq-05](https://datatracker.ietf.org/doc/html/draft-ietf-hpke-pq-05))
 
 The gateway _does not_ currently support key rotation. [This issue](https://github.com/cloudflare/app-relay-gateway-go/issues/11) tracks adding this feature.
 

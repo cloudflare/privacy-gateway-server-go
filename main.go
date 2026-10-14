@@ -38,16 +38,33 @@ const (
 
 	// service name to be reported as a label to monitoring subsystem
 	defaultMonitoringServiceName = "ohttp_gateway"
+)
 
-	// Environment variables
+// Environment variables and constants for configuring HPKE.
+const (
+	// configurationIdEnvironmentVariable is an environment variable whose integer value determines
+	// the config IDs to use when serving the default set of HPKE configurations.
+	//
+	// A draft00 hybrid configuration will be served with that config ID, a legacy X25519
+	// configuraiton will be served with that ID, minus 128, modulo 255. If `SERVE_XWING` is set, a
+	// third draft-ietf-hpke-pq-05 X-Wing configuration will be served with that ID, minus 192,
+	// modulo 255.
+	configurationIdEnvironmentVariable = "CONFIGURATION_ID"
+	// secretSeedEnvironmentVariable is an environment variable whose string value is a hex-encoded
+	// seed from which secret keys used for HPKE are derived.
+	//
+	// If not set, a random seed is generated on startup.
+	secretSeedEnvironmentVariable = "SEED_SECRET_KEY"
+)
+
+// Other environment variables for configuring the gateway.
+const (
 	gatewayEndpointEnvVariable               = "GATEWAY_ENDPOINT"
 	configEndpointEnvVariable                = "CONFIG_ENDPOINT"
 	legacyConfigEndpointEnvVariable          = "LEGACY_CONFIG_ENDPOINT"
 	echoEndpointEnvVariable                  = "ECHO_ENDPOINT"
 	metadataEndpointEnvVariable              = "METADATA_ENDPOINT"
 	healthEndpointEnvVariable                = "HEALTH_ENDPOINT"
-	configurationIdEnvironmentVariable       = "CONFIGURATION_ID"
-	secretSeedEnvironmentVariable            = "SEED_SECRET_KEY"
 	targetOriginAllowList                    = "ALLOWED_TARGET_ORIGINS"
 	customRequestEncodingType                = "CUSTOM_REQUEST_TYPE"
 	customResponseEncodingType               = "CUSTOM_RESPONSE_TYPE"
@@ -243,6 +260,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Create a third configuration using draft-ietf-hpke-pq-05 X-Wing.
+	xWingConfigID := uint8((configID - 192) % 255)
+	seed[len(seed)-2] ^= 0xFF
+	xWingConfig, err := ohttp.NewConfigFromSeed(xWingConfigID, hpke.KEM_XWING, hpke.KDF_HKDF_SHA256, hpke.AEAD_AES128GCM, seed)
+	if err != nil {
+		slog.Error("Failed to create X-Wing gateway configuration from seed", "error", err)
+		os.Exit(1)
+	}
+
+	// Always list the XWing config first, as this indicates server preference in some deployments
+	privateConfigs := []ohttp.PrivateConfig{xWingConfig, config, legacyConfig}
+
 	// Create the default HTTP handler
 	httpHandler := FilteredHttpRequestHandler{
 		client:         HTTPClientRequestHandler{client: &http.Client{}},
@@ -256,7 +285,7 @@ func main() {
 	requestLabel := os.Getenv(customRequestEncodingType)
 	responseLabel := os.Getenv(customResponseEncodingType)
 	if requestLabel == "" || responseLabel == "" || requestLabel == responseLabel {
-		gateway = ohttp.NewDefaultGateway([]ohttp.PrivateConfig{config, legacyConfig})
+		gateway = ohttp.NewDefaultGateway(privateConfigs)
 		requestLabel = "message/bhttp request"
 		responseLabel = "message/bhttp response"
 		targetHandler = DefaultEncapsulationHandler{
@@ -266,7 +295,7 @@ func main() {
 			},
 		}
 	} else if requestLabel == "message/protohttp request" && responseLabel == "message/protohttp response" {
-		gateway = ohttp.NewCustomGateway([]ohttp.PrivateConfig{config, legacyConfig}, requestLabel, responseLabel)
+		gateway = ohttp.NewCustomGateway(privateConfigs, requestLabel, responseLabel)
 		targetHandler = DefaultEncapsulationHandler{
 			gateway: gateway,
 			appHandler: ProtoHTTPAppHandler{

@@ -1,4 +1,4 @@
-FROM golang:1.24.4-bookworm as build
+FROM golang:1.25.14-bookworm AS build
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 FROM gcr.io/distroless/static
 
 ARG GIT_REVISION=unknown
-LABEL revision ${GIT_REVISION}
+LABEL revision=${GIT_REVISION}
 COPY --from=build /privacy-gateway-server /privacy-gateway-server
 
 EXPOSE 8080
